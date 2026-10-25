@@ -22,7 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** A bounded, read-only view of final model I/O. Never displays credentials or hidden reasoning. */
-final class LlmMonitor {
+final class LlmMonitor implements LiveAdvisor.Monitor {
     private static final Gson JSON = new GsonBuilder().setPrettyPrinting().create();
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private final DefaultListModel<String> history = new DefaultListModel<>();
@@ -79,7 +79,9 @@ final class LlmMonitor {
         return area;
     }
 
-    void request(String id, String instructions, JsonObject question) {
+    @Override public boolean isDisplayThread() { return SwingUtilities.isEventDispatchThread(); }
+
+    @Override public void request(String id, String instructions, JsonObject question) {
         String text = "INSTRUCTIONS\n" + instructions + "\n\nUSER MESSAGE\n" + JSON.toJson(question);
         SwingUtilities.invokeLater(() -> {
             Entry entry = new Entry();
@@ -94,7 +96,7 @@ final class LlmMonitor {
         });
     }
 
-    void response(String id, JsonObject response) {
+    @Override public void response(String id, JsonObject response) {
         JsonObject metadata = response.deepCopy();
         metadata.remove("input"); // exact input has its own tab
         String text = response.has("responseText") ? "MODEL FINAL ANSWER\n" + response.get("responseText").getAsString()
@@ -111,7 +113,7 @@ final class LlmMonitor {
         });
     }
 
-    void status(String id, String message) {
+    @Override public void status(String id, String message) {
         SwingUtilities.invokeLater(() -> {
             status.setText(message);
             events.append((id.isBlank() ? "" : id + ": ") + message + "\n");

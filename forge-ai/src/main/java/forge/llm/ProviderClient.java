@@ -17,7 +17,7 @@ public final class ProviderClient {
 
     public record Completion(String text, JsonObject usage) { }
 
-    static final String INSTRUCTIONS = "You are a Magic: The Gathering decision advisor. "
+    public static final String INSTRUCTIONS = "You are a Magic: The Gathering decision advisor. "
             + "Review the supplied game snapshot from the AI player's perspective. Select exactly one "
             + "actionId from candidates. Evaluate sequencing, resources and interactions, including combos. "
             + "The existing AI's baseline is a suggestion, not a requirement. Respect the stated scope. "

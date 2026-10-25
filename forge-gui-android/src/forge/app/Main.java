@@ -86,6 +86,8 @@ public class Main extends AndroidApplication {
     private static final long HEAP_HEARTBEAT_MS = 30_000L;
 
     private AndroidAdapter Gadapter;
+    private forge.app.llm.AndroidLlmController llm;
+    private boolean activityResumed;
     private ArrayList<String> gamepads;
     private AndroidClipboard androidClipboard;
     private boolean isMIUI;
@@ -172,6 +174,8 @@ public class Main extends AndroidApplication {
         try {
             super.onResume();
         } catch (Exception ignore) {}
+        activityResumed = true;
+        if (llm != null) { llm.setForeground(true); }
     }
 
     @Override
@@ -196,6 +200,7 @@ public class Main extends AndroidApplication {
         heapHeartbeatHandler.postDelayed(heapHeartbeat, HEAP_HEARTBEAT_MS);
 
         super.onCreate(savedInstanceState);
+        AndroidExitDiagnostics.start(getApplicationContext());
         try {
             PackageInfo pInfo = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
             versionString = pInfo.versionName;
@@ -265,14 +270,19 @@ public class Main extends AndroidApplication {
     }
 
     private void crossfade(View contentView, View previousView) {
-         activeView = contentView;
+        if (contentView == forgeView) {
+            if (llm == null) {
+                llm = new forge.app.llm.AndroidLlmController(this);
+                llm.setForeground(activityResumed);
+            }
+        }
+        activeView = contentView;
         // Set the content view to 0% opacity but visible, so that it is visible
         // (but fully transparent) during the animation.
         contentView.setAlpha(0f);
         contentView.setVisibility(View.VISIBLE);
         RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, RelativeLayout.LayoutParams.MATCH_PARENT);
         addContentView(contentView, params);
-
         Animator ac = ObjectAnimator.ofFloat(contentView, "alpha", 0f, 1f).setDuration(mShortAnimationDuration);
         Animator ap = ObjectAnimator.ofFloat(previousView, "alpha", 1f, 0f).setDuration(mShortAnimationDuration);
         AnimatorSet animatorSet = new AnimatorSet();
@@ -578,6 +588,7 @@ public class Main extends AndroidApplication {
     @Override
     protected void onDestroy() {
         netLog.info("[lifecycle] onDestroy");
+        if (llm != null) { llm.close(); llm = null; }
         if (heapHeartbeatHandler != null) {
             heapHeartbeatHandler.removeCallbacks(heapHeartbeat);
             heapHeartbeatHandler = null;
@@ -610,6 +621,8 @@ public class Main extends AndroidApplication {
     @Override
     protected void onPause() {
         netLog.info("[lifecycle] onPause");
+        activityResumed = false;
+        if (llm != null) { llm.setForeground(false); }
         super.onPause();
 
         /*ForgePreferences prefs = FModel.getPreferences();
@@ -672,6 +685,10 @@ public class Main extends AndroidApplication {
     }
 
     private class AndroidAdapter implements IDeviceAdapter {
+        @Override public boolean hasLlmAdvisor() { return true; }
+        @Override public void showLlmAdvisor() {
+            runOnUiThread(() -> { if (llm != null) { llm.show(); } });
+        }
         private final boolean isTablet;
         private final ConnectivityManager connManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         private String switchOrientationFile;

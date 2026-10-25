@@ -14,7 +14,14 @@ import forge.localinstance.properties.ForgeConstants;
 import forge.localinstance.properties.ForgeProfileProperties;
 
 public final class LogExporter {
+    private static final java.util.concurrent.CopyOnWriteArrayList<File> diagnosticFiles =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
     private LogExporter() { }
+
+    /** Register a specific platform report, without scanning private application storage. */
+    public static void registerDiagnosticFile(File file) {
+        diagnosticFiles.addIfAbsent(java.util.Objects.requireNonNull(file));
+    }
 
     /**
      * Bundle the forge and network debug logs into a timestamped zip in destDir.
@@ -70,6 +77,9 @@ public final class LogExporter {
             if (netLogs != null) {
                 Collections.addAll(files, netLogs);
             }
+        }
+        for (File report : diagnosticFiles) {
+            if (report.isFile()) { files.add(report); }
         }
         return files;
     }

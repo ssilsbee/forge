@@ -136,7 +136,7 @@ public final class LandDecisionSnapshot {
         return "p" + game.getPlayers().indexOf(player);
     }
 
-    private static JsonObject visibleCard(Card card, Player viewer) {
+    static JsonObject visibleCard(Card card, Player viewer) {
         JsonObject result = new JsonObject();
         result.addProperty("id", "card-" + card.getId());
         result.addProperty("controller", playerId(viewer.getGame(), card.getController()));
@@ -149,6 +149,9 @@ public final class LandDecisionSnapshot {
             result.addProperty("types", card.getType().toString());
             result.addProperty("manaCost", card.getManaCost().toString());
             result.addProperty("oracleText", card.getOracleText());
+            JsonArray keywords = new JsonArray();
+            for (var keyword : card.getKeywords()) { keywords.add(keyword.getOriginal()); }
+            result.add("currentKeywords", keywords);
         }
         if (card.isCreature()) {
             result.addProperty("power", card.getNetPower());

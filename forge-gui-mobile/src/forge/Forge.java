@@ -481,7 +481,12 @@ public class Forge implements ApplicationListener {
                 getAssets().fallback_skins().put("transition", new Texture(transitionFile));
             if (titleBGFile.exists())
                 getAssets().fallback_skins().put("title", new Texture(titleBGFile));
-            getAssets().setGifAnimation(new FileHandle(ForgeConstants.EFFECTS_DIR + "demo.gif"), Animation.PlayMode.LOOP);
+            // The Adventure Mode preview expands into hundreds of full-size frames and decodes
+            // pixel-by-pixel on the render thread. Keep Android startup and foreground resumes
+            // responsive by omitting this decorative animation on Android.
+            if (!GuiBase.isAndroid()) {
+                getAssets().setGifAnimation(new FileHandle(ForgeConstants.EFFECTS_DIR + "demo.gif"), Animation.PlayMode.LOOP);
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }

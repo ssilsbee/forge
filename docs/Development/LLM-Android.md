@@ -1,0 +1,117 @@
+# Android LLM play
+
+The Android app uses the same provider, deck strategy, live decision validation and fallback code
+as the desktop prototype. Both support actions, attacker/blocker declarations, visible single-entity
+resolution choices, sacrifice/destroy resolution prompts, discarding to maximum hand size, and
+scry/surveil in two-player Constructed games. Forge handles mana payment, mulligans, combat damage
+division, banding and unsupported resolution choices.
+Recent-turn memory remains deferred.
+
+## Connect on the device
+
+Choose **LLM Advisor** in the Classic Mode home menu (below Settings; scroll the menu if needed),
+or in the match's **Game** menu. There is no floating button. The panel has
+**Connect**, **Input**, **Output** and **Status** tabs. **Back to game** closes the panel.
+
+For **ChatGPT subscription**, keep `gpt-6-luna` and `high`, then use **Continue with ChatGPT**.
+Complete sign-in and consent in the device's browser, then return to Forge. Android allows 15
+minutes for a sign-in attempt. After browser authorization, return to Forge within two minutes;
+the app finishes the token exchange in the foreground so background network restrictions do not
+interrupt it. **Cancel connection request** ends it immediately. This installation has
+its own stable host identifier and tokens; it does not copy the Windows installation's rotating
+credentials. The callback binds only to `127.0.0.1` and uses PKCE, state and ID-token validation.
+
+For **OpenRouter**, choose the provider, enter an exact OpenRouter model ID and paste the API key
+into the masked key field. **Save settings** stores it locally. A blank field keeps the saved key;
+**Forget OpenRouter key** removes it. There is no provider switching on a request failure.
+
+**Test connection** sends one small request to the selected model using its provider allowance.
+Its exact instructions, input, final answer, latency and usage appear in the monitor. After a
+successful test, **Enable LLM** checks model availability and opts the current launch into LLM play.
+Start a normal local Constructed match with one human and one AI. Deck analysis runs on the first
+supported choice, and the resulting compact strategy accompanies later choices.
+
+**Pause / use Forge** cancels a pending model request and returns control to Forge. Three failed
+decisions also pause the advisor. **Enable LLM** starts it again. Closing the panel leaves the
+advisor enabled; closing the app stops it. A fresh app launch starts paused even when credentials
+are saved. Changing saved connection settings pauses the current advisor until explicitly enabled.
+
+Combat alternatives are enumerated in scratch combat objects and validated using the engine's attack
+constraints and block validators before applying them. No candidate changes the live declaration
+during the request. Attack/block costs stay in Forge's prepared baseline; alternatives are cost-free.
+Search is bounded to 256 declarations and 16,384 nodes; oversized or banding positions use the
+unchanged Forge declaration with an explanation in Status. Card subsets are bounded to 128 choices;
+scry/surveil cover up to six looked-at cards, preserving each listed pile's order. Hidden card choices
+stay with Forge. Actions and these additional choices each have a 20-request per-turn budget, with
+the existing shared 150-request per-game cap. Priority snapshots also include combat assignments
+and current keywords so combat tricks have the relevant context.
+
+The request selector retains up to 60 entries. **Input** shows the complete instructions and user
+message, including the AI's hand. **Output** shows the final visible model answer and report;
+**Status** shows validation, executed moves, cancellation and fallback. Hidden reasoning and
+credentials are not displayed. The API-key field is masked, excludes autofill, and blocks screen
+capture while focused.
+
+Credentials and settings are encrypted with AES-256-GCM using a nonexportable Android Keystore
+key. All LLM state lives beneath `Context.getNoBackupFilesDir()/llm`, outside shared storage and
+Android backup. Recorded decisions and deck plans are owner-only private files. Reinstalling the
+app after uninstall, or clearing its storage, requires connecting again.
+
+For unexplained app closes, reopen Forge and use **Classic Mode → Settings → Files → Export Logs**.
+On Android 11 and newer the ZIP also includes `forge.android-exits.log`, containing Android's
+last 20 process-exit records and up to three available native-crash or ANR traces. The system
+may already retain the previous failure, so reproducing sign-in is not required to collect it.
+
+## Local Windows build
+
+With the adjacent workspace Java 17, Maven 3.8.1, Android SDK 35/build tools 35.0.0 and local Maven
+repository installed:
+
+```powershell
+.\tools\build-android-local.ps1
+.\tools\start-android-local.ps1
+```
+
+The build helper temporarily uses free `F:`, `R:` and `S:` drive aliases to keep D8's command line
+below Windows' limit. It releases the aliases afterward, then produces a debug-signed APK under
+`forge-gui-android/target/signed-llm/`. Paths can be supplied explicitly as script parameters.
+The start helper uses 8 GB RAM and an isolated temporary directory. Start the emulator with normal
+network access when using a restricted development shell; otherwise provider connections fail.
+
+The emulator needs the ordinary Forge asset pack, as for upstream Forge. Credential setup does
+not put secrets in that pack or on the SD card. No credentials are bundled in the APK.
+
+## Verified on October 25, 2026
+
+The Android 15 emulator with 8 GB RAM completed its own ChatGPT registration and encrypted token
+storage. GPT-6 Luna with high reasoning completed a native connection check in 1,797 ms. In a
+real local human-versus-AI Constructed match, it analyzed the 60-card red demonstration deck,
+played a Mountain (3,615 ms), then cast Goblin Arsonist (2,851 ms) where the baseline was pass.
+The human passed priority, and the creature resolved onto the battlefield. Input, Output and
+Status displayed the deck plan, decision context, visible answers, validation and execution.
+The panel remained usable while deck analysis was pending. Pause/resume was exercised, and a
+fresh app process loaded the encrypted connection and completed another inference without login.
+
+All 36 shared LLM checks passed after the initial port. After adding the configurable sign-in
+deadline, the 23 provider/authentication/live-play checks passed, including the new deadline
+check. Both Android packaging and v2/v3 debug-signature verification passed. This smoke test
+does not cover a complete game, an OpenRouter account, or physical Android hardware.
+
+The menu/combat update passed 19 targeted live-play and combat/choice checks. These cover mandatory
+attacks and blocks, menace, flying, additional blocks, bounded search, stale/invalid responses,
+controller routing, card selection and hidden-information boundaries. The Android APK built and
+passed signature verification. Both Classic Mode home and match Game menu entries opened the
+advisor in the emulator, with the floating button removed and the saved ChatGPT connection retained.
+In a live match GPT-6 Luna/high played Mountain, cast Raging Goblin, and reviewed its first-turn
+attack declaration in 2,660 ms: it chose to attack for one damage into an empty defending battlefield.
+Status recorded a validated `declare_attackers` selection and the human's life went from 20 to 19.
+The updated blocking and resolution paths have engine tests; they were not all exercised against
+the live provider in the emulator.
+
+For an emulator sign-in completed in the Windows browser, forward the app's selected loopback
+port with `adb forward tcp:PORT tcp:PORT` before opening its authorization URL. Remove that
+forward after sign-in. The device browser on physical Android uses its own loopback directly.
+Keep the emulator independent of a short-lived build process while authorization is pending.
+
+References: [OpenAI registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+[Android Keystore](https://developer.android.com/privacy-and-security/keystore).

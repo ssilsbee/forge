@@ -3,14 +3,12 @@ package forge.llm;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.sun.net.httpserver.HttpServer;
+
 import forge.ai.llm.PrivateFiles;
 
-import java.awt.Desktop;
+
 import java.io.IOException;
 import java.math.BigInteger;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.channels.FileChannel;
@@ -31,8 +29,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /** Documented Sign in with ChatGPT for local open-source clients. Own registration, never Codex tokens. */
 public final class ChatGptAuth {
@@ -43,9 +39,48 @@ public final class ChatGptAuth {
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
     private static final SecureRandom RANDOM = new SecureRandom();
     private final Path directory;
+    private final Browser browser;
+    private final Storage storage;
+    private final Duration signInWindow;
+    private final BeforeTokenExchange beforeTokenExchange;
+
+    @FunctionalInterface public interface Browser { void open(URI uri) throws IOException; }
+    @FunctionalInterface public interface BeforeTokenExchange { void awaitReady() throws IOException; }
+    public interface Storage {
+        JsonObject read(Path path) throws IOException;
+        void write(Path path, JsonObject value) throws IOException;
+    }
 
     public ChatGptAuth(Path directory) {
+        this(directory, uri -> {
+            try {
+                Class<?> desktop = Class.forName("java.awt.Desktop");
+                desktop.getMethod("browse", URI.class).invoke(desktop.getMethod("getDesktop").invoke(null), uri);
+            } catch (Exception e) { System.out.println("Open this URL on this computer: " + uri); }
+        }, new Storage() {
+            @Override public JsonObject read(Path path) throws IOException { return LlmHttp.object(new String(Files.readAllBytes(path), StandardCharsets.UTF_8)); }
+            @Override public void write(Path path, JsonObject value) throws IOException { PrivateFiles.write(path, value.toString()); }
+        });
+    }
+
+    public ChatGptAuth(Path directory, Browser browser, Storage storage) {
+        this(directory, browser, storage, Duration.ofMinutes(5));
+    }
+
+    public ChatGptAuth(Path directory, Browser browser, Storage storage, Duration signInWindow) {
+        this(directory, browser, storage, signInWindow, () -> { });
+    }
+
+    public ChatGptAuth(Path directory, Browser browser, Storage storage, Duration signInWindow,
+                       BeforeTokenExchange beforeTokenExchange) {
+        if (signInWindow.isNegative() || signInWindow.isZero() || signInWindow.compareTo(Duration.ofMinutes(30)) > 0) {
+            throw new IllegalArgumentException("Invalid sign-in timeout.");
+        }
         this.directory = directory.toAbsolutePath();
+        this.browser = browser;
+        this.storage = storage;
+        this.signInWindow = signInWindow;
+        this.beforeTokenExchange = java.util.Objects.requireNonNull(beforeTokenExchange);
     }
 
     @FunctionalInterface
@@ -72,13 +107,13 @@ public final class ChatGptAuth {
     }
 
     private JsonObject read(Path path) throws IOException {
-        return Files.exists(path) ? LlmHttp.object(Files.readString(path)) : new JsonObject();
+        return Files.exists(path) ? storage.read(path) : new JsonObject();
     }
 
     private JsonObject settings() throws IOException { return read(directory.resolve("settings.json")); }
 
     private void saveSettings(JsonObject settings) throws IOException {
-        PrivateFiles.write(directory.resolve("settings.json"), settings.toString());
+        storage.write(directory.resolve("settings.json"), settings);
     }
 
     private Path profilePath(String id) throws IOException {
@@ -125,7 +160,7 @@ public final class ChatGptAuth {
             JsonObject host = read(directory.resolve("host.json"));
             if (!host.has("hostId")) {
                 host.addProperty("hostId", "urn:uuid:" + UUID.randomUUID());
-                PrivateFiles.write(directory.resolve("host.json"), host.toString());
+                storage.write(directory.resolve("host.json"), host);
             }
             String profileId;
             if (newAccount) {
@@ -149,36 +184,8 @@ public final class ChatGptAuth {
             String verifier = randomValue();
             String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
                     MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
-            CompletableFuture<Map<String, String>> callback = new CompletableFuture<>();
-            HttpServer listener = HttpServer.create(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0);
-            String redirect = "http://127.0.0.1:" + listener.getAddress().getPort() + "/auth/callback";
-            listener.createContext("/auth/callback", exchange -> {
-                int status = 200;
-                String message = "Authorization received. Return to Forge for the connection result.";
-                try {
-                    if (!"GET".equals(exchange.getRequestMethod())
-                            || !"/auth/callback".equals(exchange.getRequestURI().getPath())) {
-                        throw new IOException("Invalid callback.");
-                    }
-                    Map<String, String> params = callbackParameters(exchange.getRequestURI().getRawQuery(), state, registered);
-                    if (params.containsKey("error")) {
-                        callback.completeExceptionally(new IOException("ChatGPT authorization was declined."));
-                        message = "Authorization was declined. Return to Forge.";
-                    } else {
-                        callback.complete(params);
-                    }
-                } catch (IOException e) {
-                    status = 400;
-                    message = "Invalid or expired authorization callback.";
-                }
-                byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
-                exchange.getResponseHeaders().set("Cache-Control", "no-store");
-                exchange.sendResponseHeaders(status, bytes.length);
-                try (var out = exchange.getResponseBody()) { out.write(bytes); }
-            });
-            listener.start();
-            try {
+            try (OAuthLoopback listener = new OAuthLoopback(state, registered)) {
+                String redirect = listener.redirect();
                 Map<String, String> query = new LinkedHashMap<>();
                 query.put("client_id", registered == null ? "dynamic_agent_client" : registered);
                 if (registered == null) { query.put("agent_name_hint", "Forge LLM Advisor"); }
@@ -193,15 +200,10 @@ public final class ChatGptAuth {
                 query.put("code_challenge", challenge);
                 URI authorize = URI.create(ISSUER + "/api/accounts/authorize?" + LlmHttp.form(query));
                 System.out.println("Continue with ChatGPT in your browser. Approve ChatGPT plan usage for Forge LLM Advisor.");
-                try {
-                    Desktop.getDesktop().browse(authorize);
-                } catch (Exception e) {
-                    // No retained ID token is included in this URL, so it is safe to display locally.
-                    System.out.println("Open this URL on this computer: " + authorize);
-                }
+                browser.open(authorize);
                 Map<String, String> result;
                 try {
-                    result = callback.get(5, TimeUnit.MINUTES);
+                    result = listener.await(signInWindow);
                 } catch (java.util.concurrent.TimeoutException e) {
                     throw new IOException("ChatGPT sign-in timed out; start login again.");
                 } catch (java.util.concurrent.ExecutionException e) {
@@ -210,9 +212,10 @@ public final class ChatGptAuth {
                 String clientId = result.getOrDefault("client_id", registered);
                 profile.addProperty("client_id", clientId);
                 // Keep the issued registration even if the code expires before exchange.
-                PrivateFiles.write(profilePath, profile.toString());
+                storage.write(profilePath, profile);
                 settings.addProperty("pendingProfile", profileId);
                 saveSettings(settings);
+                beforeTokenExchange.awaitReady();
                 JsonObject token = tokenRequest(Map.of("grant_type", "authorization_code", "client_id", clientId,
                         "code", result.get("code"), "code_verifier", verifier,
                         "redirect_uri", redirect, "resource", RESOURCE));
@@ -222,7 +225,7 @@ public final class ChatGptAuth {
                 profile.add("subject", identity.get("sub"));
                 profile.add("email", identity.get("email"));
                 applyTokens(profile, token, false);
-                PrivateFiles.write(profilePath, profile.toString());
+                storage.write(profilePath, profile);
                 settings.addProperty("activeProfile", profileId);
                 settings.remove("pendingProfile");
                 saveSettings(settings);
@@ -230,8 +233,6 @@ public final class ChatGptAuth {
                     throw new IOException("Signed in, but ChatGPT plan usage was not granted. Enable it when reconnecting.");
                 }
                 return profileId;
-            } finally {
-                listener.stop(0);
             }
         });
     }
@@ -257,7 +258,7 @@ public final class ChatGptAuth {
                     checkSameIdentity(profile, identity);
                 }
                 applyTokens(profile, token, true);
-                PrivateFiles.write(path, profile.toString());
+                storage.write(path, profile);
                 if (!hasDirectScope(profile)) {
                     throw new IOException("ChatGPT plan usage is no longer authorized for this profile.");
                 }
@@ -287,7 +288,7 @@ public final class ChatGptAuth {
             for (String field : List.of("access_token", "refresh_token", "id_token", "scope", "expires_at", "earliest_refresh_at")) {
                 profile.remove(field);
             }
-            PrivateFiles.write(path, profile.toString());
+            storage.write(path, profile);
             return revoked;
         });
     }

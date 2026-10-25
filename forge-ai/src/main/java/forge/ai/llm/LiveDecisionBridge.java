@@ -21,9 +21,10 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
-/** Opt-in desktop adapter. All game-object access and final validation remain on the game thread. */
+/** Opt-in live adapter. All game-object access and final validation remain on the game thread. */
 public final class LiveDecisionBridge {
     public interface Advisor {
+        default boolean isEnabled() { return true; }
         String choose(Player player, JsonObject question) throws Exception;
         void status(String decisionId, String message);
     }
@@ -32,8 +33,8 @@ public final class LiveDecisionBridge {
     private LiveDecisionBridge() { }
     public static void install(Advisor value) { advisor = value; }
 
-    private static boolean enabled(Player player) {
-        return advisor != null && player.getGame().getMaingame() == null
+    static boolean enabled(Player player) {
+        return advisor != null && advisor.isEnabled() && player.getGame().getMaingame() == null
                 && !player.getGame().isNoGUIUser() && !player.getGame().isGameOver()
                 && player.getGame().getAge() == GameStage.Play
                 && player.getGame().getRules().getGameType() == GameType.Constructed
@@ -52,8 +53,8 @@ public final class LiveDecisionBridge {
             String baselineId = baseline == null ? "pass" : "forge";
             JsonObject question = question(player, options, baselineId, decisionId,
                     "Live hybrid decision. Choose a listed legal move or pass. Forge's prepared move may include "
-                    + "choices outside the enumerated alternatives. Other decisions, combat, mana selection and "
-                    + "resolution choices remain Forge-controlled. Current state and legal actions override the advisory deck plan.");
+                    + "choices outside the enumerated alternatives. Combat and supported resolution choices are reviewed "
+                    + "separately. Mana payment remains Forge-controlled. Current state and legal actions override the advisory deck plan.");
             if (question == null) { return baseline; }
             String id = advisor.choose(player, question);
             Option selected = options.stream().filter(o -> o.id.equals(id)).findFirst().orElseThrow();
@@ -183,7 +184,40 @@ public final class LiveDecisionBridge {
             stack.add(entry);
         }
         state.add("stack", stack);
+        if (player.getGame().getCombat() != null) {
+            state.add("combat", LiveCombatBridge.snapshot(player.getGame().getCombat()));
+        }
         return state;
+    }
+
+    /** Shared bounded contract for combat and resolution choices; failures preserve the prepared baseline. */
+    static String recommend(Player player, String kind, String scope, List<Option> options,
+                            String baseline, JsonObject context) {
+        if (!enabled(player) || options.size() < 2) { return baseline; }
+        Advisor active = advisor;
+        String id = UUID.randomUUID().toString();
+        try {
+            JsonObject input = question(player, options, baseline, id, scope);
+            if (input == null) { return baseline; }
+            input.addProperty("choiceKind", kind);
+            input.add("choiceContext", context);
+            String selected = active.choose(player, input);
+            if (advisor != active || !active.isEnabled() || player.getGame().isGameOver()) { return baseline; }
+            if (options.stream().noneMatch(option -> option.id().equals(selected))) {
+                throw new IllegalArgumentException("Unlisted action ID.");
+            }
+            active.status(id, "Validated " + kind + " selection: " + selected);
+            return selected;
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) { Thread.currentThread().interrupt(); }
+            active.status(id, "Forge fallback for " + kind + ": " + e.getClass().getSimpleName());
+            return baseline;
+        }
+    }
+
+    static void fallback(String kind, String reason) {
+        Advisor active = advisor;
+        if (active != null && active.isEnabled()) { active.status("", "Forge handles " + kind + ": " + reason); }
     }
 
     public static <T extends GameEntity> T legend(Player player, FCollectionView<T> options, SpellAbility ability, T normal) {

@@ -276,12 +276,17 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public CardCollectionView choosePermanentsToSacrifice(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
-        return ComputerUtil.choosePermanentsToSacrifice(player, validTargets, max, sa, false, min == 0);
+        CardCollectionView baseline = ComputerUtil.choosePermanentsToSacrifice(player, validTargets, max, sa, false, min == 0);
+        // Offering/emerge cost previews call this too; only review actual resolution prompts here.
+        if (sa == null || (sa.getApi() != ApiType.Sacrifice && sa.getApi() != ApiType.Balance)) { return baseline; }
+        return forge.ai.llm.LiveChoiceBridge.cards(player, validTargets, min, max, sa, "Sacrifice: " + message, baseline);
     }
 
     @Override
     public CardCollectionView choosePermanentsToDestroy(SpellAbility sa, int min, int max, CardCollectionView validTargets, String message) {
-        return ComputerUtil.choosePermanentsToSacrifice(player, validTargets, max, sa, true, min == 0);
+        CardCollectionView baseline = ComputerUtil.choosePermanentsToSacrifice(player, validTargets, max, sa, true, min == 0);
+        if (sa == null || (sa.getApi() != ApiType.Sacrifice && sa.getApi() != ApiType.Destroy && sa.getApi() != ApiType.Balance)) { return baseline; }
+        return forge.ai.llm.LiveChoiceBridge.cards(player, validTargets, min, max, sa, "Destroy: " + message, baseline);
     }
 
     @Override
@@ -341,7 +346,10 @@ public class PlayerControllerAi extends PlayerController {
             reveal(delayedReveal);
         }
         T normal = SpellApiToAi.Converter.get(sa).chooseSingleEntity(player, sa, optionList, isOptional, targetedPlayer, params);
-        return forge.ai.llm.LiveDecisionBridge.legend(player, optionList, sa, normal);
+        if (sa.getApi() == ApiType.InternalLegendaryRule) {
+            return forge.ai.llm.LiveDecisionBridge.legend(player, optionList, sa, normal);
+        }
+        return forge.ai.llm.LiveChoiceBridge.entity(player, optionList, sa, title, isOptional, normal);
     }
 
     @Override
@@ -528,7 +536,7 @@ public class PlayerControllerAi extends PlayerController {
 
         // put the rest on top in random order
         CardLists.shuffle(toTop);
-        return ImmutablePair.of(toTop, toBottom);
+        return forge.ai.llm.LiveChoiceBridge.partition(player, topN, ImmutablePair.of(toTop, toBottom), false);
     }
 
     /* (non-Javadoc)
@@ -554,7 +562,7 @@ public class PlayerControllerAi extends PlayerController {
         }
 
         CardLists.shuffle(toTop);
-        return ImmutablePair.of(toTop, toGraveyard);
+        return forge.ai.llm.LiveChoiceBridge.partition(player, topN, ImmutablePair.of(toTop, toGraveyard), true);
     }
 
     @Override
@@ -839,11 +847,13 @@ public class PlayerControllerAi extends PlayerController {
     @Override
     public void declareAttackers(Player attacker, Combat combat) {
         brains.declareAttackers(attacker, combat);
+        if (player.equals(attacker)) { forge.ai.llm.LiveCombatBridge.attackers(player, combat); }
     }
 
     @Override
     public void declareBlockers(Player defender, Combat combat) {
         brains.declareBlockersFor(defender, combat);
+        forge.ai.llm.LiveCombatBridge.blockers(player, defender, combat);
     }
 
     @Override
@@ -901,7 +911,9 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public CardCollectionView chooseCardsToDiscardToMaximumHandSize(int numDiscard) {
-        return brains.getCardsToDiscard(numDiscard, null, null);
+        CardCollectionView baseline = brains.getCardsToDiscard(numDiscard, null, null);
+        return forge.ai.llm.LiveChoiceBridge.cards(player, player.getCardsIn(ZoneType.Hand), numDiscard, numDiscard,
+                null, "Discard to maximum hand size", baseline);
     }
 
     @Override

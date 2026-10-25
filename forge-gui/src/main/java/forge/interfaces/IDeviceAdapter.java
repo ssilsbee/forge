@@ -33,6 +33,9 @@ public interface IDeviceAdapter {
     boolean needFileAccess();
     void requestFileAcces();
 
+    default boolean hasLlmAdvisor() { return false; }
+    default void showLlmAdvisor() { }
+
     /** Confine the mouse cursor to the window (desktop LibGDX only). Default no-op. */
     default void setMouseConfined(boolean confined) {
     }

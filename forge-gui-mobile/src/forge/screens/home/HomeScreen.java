@@ -112,6 +112,9 @@ public class HomeScreen extends FScreen {
             Forge.lastButtonIndex = activeButtonIndex;
             SettingsScreen.show(true);
         });
+        if (Forge.getDeviceAdapter().hasLlmAdvisor()) {
+            addButton("LLM Advisor", e -> Forge.getDeviceAdapter().showLlmAdvisor());
+        }
         addButton("Replays", e -> ReplayLauncher.chooseAndPlay());
         addButton(Forge.getLocalizer().getMessage("lblHelp"), e -> FThreads.invokeInEdtLater(() -> {
             try {

@@ -81,6 +81,10 @@ public class VGameMenu extends FDropDownMenu {
                 MatchController.instance.getGameController().sendYieldUpdate(new YieldUpdate.ClearAbilityOrders())
         ));
         if (!Forge.isMobileAdventureMode) {
+            if (Forge.getDeviceAdapter().hasLlmAdvisor()) {
+                addItem(new FMenuItem("LLM Advisor", FSkinImage.SETTINGS,
+                        e -> Forge.getDeviceAdapter().showLlmAdvisor()));
+            }
             addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblSettings"), Forge.hdbuttons ? FSkinImage.HDPREFERENCE : FSkinImage.SETTINGS, e -> {
                 //pause game when spectating AI Match
                 if (!MatchController.instance.hasLocalPlayers()) {

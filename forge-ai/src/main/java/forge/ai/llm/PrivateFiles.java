@@ -44,7 +44,7 @@ public final class PrivateFiles {
         Path temporary = Files.createTempFile(parent, ".llm-", ".tmp");
         try {
             protect(temporary);
-            Files.writeString(temporary, content, StandardCharsets.UTF_8);
+            Files.write(temporary, content.getBytes(StandardCharsets.UTF_8));
             try {
                 Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE,
                         StandardCopyOption.REPLACE_EXISTING);
