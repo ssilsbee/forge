@@ -340,7 +340,8 @@ public class PlayerControllerAi extends PlayerController {
         if (delayedReveal != null) {
             reveal(delayedReveal);
         }
-        return SpellApiToAi.Converter.get(sa).chooseSingleEntity(player, sa, optionList, isOptional, targetedPlayer, params);
+        T normal = SpellApiToAi.Converter.get(sa).chooseSingleEntity(player, sa, optionList, isOptional, targetedPlayer, params);
+        return forge.ai.llm.LiveDecisionBridge.legend(player, optionList, sa, normal);
     }
 
     @Override
@@ -847,18 +848,24 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public List<SpellAbility> chooseSpellAbilityToPlay() {
-        return brains.chooseSpellAbilityToPlay();
+        final List<SpellAbility> chosen = brains.chooseSpellAbilityToPlay();
+        // Capture after the thinking deadline has been disarmed, before the move is played.
+        forge.ai.llm.ShadowDecisionRecorder.record(player, chosen);
+        return forge.ai.llm.LiveDecisionBridge.choose(player, chosen);
     }
 
     @Override
     public boolean playChosenSpellAbility(SpellAbility sa) {
+        boolean played = false;
         if (sa.isLandAbility()) {
             if (sa.canPlay()) {
                 sa.resolve();
+                played = true;
             }
         } else {
-            ComputerUtil.handlePlayingSpellAbility(player, sa, getDeferredTargetingPlayerAction(sa));
+            played = ComputerUtil.handlePlayingSpellAbility(player, sa, getDeferredTargetingPlayerAction(sa));
         }
+        forge.ai.llm.LiveDecisionBridge.executed(player, sa, played);
         return true;
     }
 

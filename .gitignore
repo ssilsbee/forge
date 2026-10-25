@@ -103,3 +103,7 @@ __pycache__
 # EDHREC commander matrix tool intermediates
 forge-gui/tools/build
 forge-gui-ios/robovm.properties
+
+# Local LLM credentials and private game captures
+.forge-llm/
+llm-captures/
