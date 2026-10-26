@@ -69,7 +69,7 @@ public final class LandDecisionSnapshot {
         root.addProperty("turn", game.getPhaseHandler().getTurn());
         root.addProperty("phase", game.getPhaseHandler().getPhase().name());
         root.addProperty("viewer", playerId(game, viewer));
-        root.addProperty("informationPolicy", "Own hand plus visible public cards; opponent hands and all libraries are counts only. Face-down identities are omitted. Oracle text is printed text; current types, stats and counters are included.");
+        root.addProperty("informationPolicy", "Own hand plus visible public cards; opponent hands and all libraries are counts only. Face-down identities are omitted. Oracle text is printed text; current types, stats and counters are included. Battlefield creatures include summoningSick, accounting for haste. Summoning sickness does not prevent blocking.");
         JsonArray players = new JsonArray();
         int publicCardCount = 0;
         for (Player player : game.getPlayers()) {
@@ -154,6 +154,9 @@ public final class LandDecisionSnapshot {
             result.add("currentKeywords", keywords);
         }
         if (card.isCreature()) {
+            if (card.isInZone(ZoneType.Battlefield)) {
+                result.addProperty("summoningSick", card.isSick());
+            }
             result.addProperty("power", card.getNetPower());
             result.addProperty("toughness", card.getNetToughness());
             result.addProperty("damage", card.getDamage());

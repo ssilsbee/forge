@@ -64,6 +64,35 @@ public class LiveCombatChoiceTest extends AITest {
         assertTrue(CombatUtil.validateAttackers(combat));
     }
 
+    public void sicknessContextMatchesTheEngineIncludingHasteAndOpponentCreatures() {
+        Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1), opponent = game.getPlayers().get(0);
+        Card sick = addCard("Grizzly Bears", ai); sick.setSickness(true);
+        Card ready = ready("Llanowar Elves", ai);
+        Card haste = addCard("Raging Goblin", ai); haste.setSickness(true);
+        Card opposing = addCard("Grizzly Bears", opponent); opposing.setSickness(true);
+        Combat combat = combat(game, ai);
+        AtomicInteger requests = new AtomicInteger();
+        advisor(input -> {
+            requests.incrementAndGet();
+            for (Card card : List.of(sick, ready, haste, opposing)) {
+                JsonObject context = input.getAsJsonArray("players").asList().stream()
+                        .flatMap(p -> p.getAsJsonObject().getAsJsonArray("Battlefield").asList().stream())
+                        .map(c -> c.getAsJsonObject())
+                        .filter(c -> c.get("id").getAsString().equals("card-" + card.getId()))
+                        .findFirst().orElseThrow();
+                assertEquals(context.get("summoningSick").getAsBoolean(), card == sick || card == opposing);
+            }
+            assertTrue(input.get("informationPolicy").getAsString().contains("does not prevent blocking"));
+            assertTrue(input.getAsJsonArray("candidates").asList().stream()
+                    .noneMatch(c -> c.getAsJsonObject().get("description").getAsString().contains("Grizzly Bears")));
+            return select(input, "Raging Goblin");
+        });
+        LiveCombatBridge.attackers(ai, combat);
+        assertEquals(requests.get(), 1);
+        assertTrue(combat.isAttacking(haste, opponent));
+        assertFalse(combat.isAttacking(sick));
+    }
+
     public void mandatoryAttacksAreNeverOfferedAsOptional() {
         Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1), opponent = game.getPlayers().get(0);
         addCard("Trove of Temptation", opponent);
