@@ -3,15 +3,21 @@ package forge.ai.llm;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import forge.game.GameEntity;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
 import forge.game.player.Player;
+import forge.game.player.DelayedReveal;
 import forge.game.spellability.SpellAbility;
+import forge.game.zone.ZoneType;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Comparator;
 
 /** Resolution prompts expose only supplied legal options; the original AI result remains the fallback. */
 public final class LiveChoiceBridge {
@@ -40,13 +46,43 @@ public final class LiveChoiceBridge {
 
     public static <T extends GameEntity> T entity(Player player, Iterable<T> offered, SpellAbility ability,
                                                  String prompt, boolean optional, T baseline) {
+        return entity(player, offered, ability, prompt, optional, baseline, Set.of(),
+                context(player, ability, prompt), "choose_entity");
+    }
+
+    /** Only this engine search callback can authorize otherwise-hidden library cards, for this choice only. */
+    public static Card zoneChange(Player player, ZoneType destination, List<ZoneType> origin, SpellAbility ability,
+                                  CardCollectionView offered, DelayedReveal reveal, String prompt,
+                                  boolean optional, Player decider, Card baseline) {
+        if (!LiveDecisionBridge.enabled(player) || decider != player || ability == null
+                || ability.getApi() != ApiType.ChangeZone || !origin.contains(ZoneType.Library)) { return baseline; }
+        Set<Card> lookedAt = new HashSet<>();
+        if (reveal != null && reveal.getZone().contains(ZoneType.Library) && !ability.hasParam("NoLooking")) {
+            for (Card card : offered) {
+                if (card.isInZone(ZoneType.Library) && card.getOwner().getView().equals(reveal.getOwner())
+                        && reveal.getCards().contains(card.getView())) { lookedAt.add(card); }
+            }
+        }
+        List<Card> choices = new ArrayList<>();
+        for (Card card : offered) { choices.add(card); }
+        // Never transmit the order of the shuffled library, including when the engine supplied an ordered pool.
+        choices.sort(Comparator.comparing((Card card) -> card.getName()).thenComparingInt(Card::getId));
+        JsonObject context = context(player, ability, prompt);
+        context.addProperty("destination", destination.name());
+        context.addProperty("informationPolicy", "Only the engine's legal offered search candidates are shown. Hidden identities require this search's explicit reveal permission. Candidates are sorted independently of library order; no other library cards are exposed.");
+        return entity(player, choices, ability, prompt, optional, baseline, lookedAt, context, "library_search");
+    }
+
+    private static <T extends GameEntity> T entity(Player player, Iterable<T> offered, SpellAbility ability,
+                                                  String prompt, boolean optional, T baseline, Set<Card> lookedAt,
+                                                  JsonObject context, String kind) {
         if (!LiveDecisionBridge.enabled(player) || (baseline == null && !optional)) { return baseline; }
         List<T> choices = new ArrayList<>(); choices.add(baseline);
-        JsonObject context = context(player, ability, prompt); JsonArray cards = new JsonArray();
+        JsonArray cards = new JsonArray();
         boolean containsBaseline = baseline == null;
         for (T option : offered) {
             if (option instanceof Card card) {
-                if (!visible(card, player)) {
+                if (!visible(card, player) && !lookedAt.contains(card)) {
                     LiveDecisionBridge.diagnostic("Forge handled choices", "Single entity: offered identity is hidden"); return baseline;
                 }
                 cards.add(LandDecisionSnapshot.visibleCard(card, player));
@@ -64,7 +100,7 @@ public final class LiveChoiceBridge {
         for (int i = 0; i < choices.size(); i++) {
             options.add(new LiveDecisionBridge.Option(i == 0 ? "forge" : "entity-" + i, label(choices.get(i)), null));
         }
-        String selected = LiveDecisionBridge.recommend(player, "choose_entity",
+        String selected = LiveDecisionBridge.recommend(player, kind,
                 "Choose exactly one of the offered legal entities for this resolution prompt. Declining is available only "
                 + "when explicitly listed. Offered cards are visible to the chooser.", options, "forge", context);
         return selected.equals("forge") ? baseline : choices.get(Integer.parseInt(selected.substring(7)));

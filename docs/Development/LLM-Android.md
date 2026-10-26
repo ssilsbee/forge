@@ -84,6 +84,16 @@ choices stay with Forge. Double-faced sources, more complex activation structure
 these families retain the prior fallback behavior. Candidates now include structured source IDs,
 costs, effect types and target IDs, in addition to their descriptions.
 
+Single-card library searches such as Tinker also use the advisor at the engine's dedicated
+`chooseSingleCardForZoneChange` callback. This callback receives the exact eligible pool and a
+`DelayedReveal` describing what this search permits the chooser to inspect. Only eligible library
+cards included in that explicit reveal (with the matching owner and library zone) can bypass the
+normal hidden-card check. Other visible offered cards retain normal visibility rules. No global
+viewing permission is changed, and ordinary snapshots still contain library counts only. Offered
+candidates are sorted by name and ID rather than library order. Blind searches, missing reveal
+permission and oversized pools preserve Forge's prepared choice. Subsequent picks in a multi-card
+search without a fresh reveal may also stay with Forge; this is not general multi-card tutor support.
+
 Combat alternatives are enumerated in scratch combat objects and validated using the engine's attack
 constraints and block validators before applying them. No candidate changes the live declaration
 during the request. Attack/block costs stay in Forge's prepared baseline; alternatives are cost-free.

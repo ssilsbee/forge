@@ -1617,7 +1617,9 @@ public class PlayerControllerAi extends PlayerController {
         if (delayedReveal != null) {
             reveal(delayedReveal);
         }
-        return brains.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player, decider);
+        Card normal = brains.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player, decider);
+        return forge.ai.llm.LiveChoiceBridge.zoneChange(player, destination, origin, sa, fetchList,
+                delayedReveal, selectPrompt, isOptional, decider, normal);
     }
 
     @Override
