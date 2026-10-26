@@ -30,6 +30,7 @@ final class LlmMonitor implements LiveAdvisor.Monitor {
     private final JTextArea input = area();
     private final JTextArea output = area();
     private final JTextArea events = area();
+    private final JTextArea insights = area();
     private final JLabel status = new JLabel("Ready. Start a local Constructed match with one human and one AI.");
     private final JFrame frame = new JFrame("Forge LLM Monitor — GPT-6 Luna high");
     private static final class Entry { String label; String input = ""; String output = "Waiting for response…"; }
@@ -48,6 +49,7 @@ final class LlmMonitor implements LiveAdvisor.Monitor {
         tabs.addTab("Input", new JScrollPane(input));
         tabs.addTab("Output", new JScrollPane(output));
         tabs.addTab("Moves and status", new JScrollPane(events));
+        tabs.addTab("Insights", new JScrollPane(insights));
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, new JScrollPane(list), tabs);
         split.setDividerLocation(215);
         list.addListSelectionListener(e -> render());
@@ -111,6 +113,10 @@ final class LlmMonitor implements LiveAdvisor.Monitor {
             if (entry != null) { entry.output = text; }
             render();
         });
+    }
+
+    @Override public void insights(String report) {
+        SwingUtilities.invokeLater(() -> insights.setText(report));
     }
 
     @Override public void status(String id, String message) {

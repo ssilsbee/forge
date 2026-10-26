@@ -93,6 +93,31 @@ public class LiveCombatChoiceTest extends AITest {
         assertFalse(combat.isAttacking(sick));
     }
 
+    public void combatContextLinksEquipmentToItsCreatureWithoutRevealingOpponentHands() {
+        Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1), opponent = game.getPlayers().get(0);
+        Card creature = ready("Grizzly Bears", ai), equipment = addCard("Bonesplitter", ai);
+        equipment.attachToEntity(creature, null, true);
+        addCardToZone("Wrath of God", opponent, ZoneType.Hand);
+        Combat combat = combat(game, ai);
+        AtomicInteger requests = new AtomicInteger();
+        advisor(input -> {
+            requests.incrementAndGet();
+            var cards = input.getAsJsonArray("players").asList().stream()
+                    .flatMap(p -> p.getAsJsonObject().getAsJsonArray("Battlefield").asList().stream())
+                    .map(c -> c.getAsJsonObject()).toList();
+            JsonObject source = cards.stream().filter(c -> c.get("id").getAsString().equals("card-" + equipment.getId())).findFirst().orElseThrow();
+            JsonObject target = cards.stream().filter(c -> c.get("id").getAsString().equals("card-" + creature.getId())).findFirst().orElseThrow();
+            assertEquals(source.get("attachedToId").getAsString(), "card-" + creature.getId());
+            assertEquals(target.getAsJsonArray("attachmentIds").get(0).getAsString(), "card-" + equipment.getId());
+            assertFalse(source.get("token").getAsBoolean());
+            assertFalse(input.toString().contains("Wrath of God"));
+            return "forge";
+        });
+        LiveCombatBridge.attackers(ai, combat);
+        assertEquals(requests.get(), 1);
+        assertTrue(combat.getAttackers().isEmpty());
+    }
+
     public void mandatoryAttacksAreNeverOfferedAsOptional() {
         Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1), opponent = game.getPlayers().get(0);
         addCard("Trove of Temptation", opponent);

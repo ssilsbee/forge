@@ -43,6 +43,25 @@ decisions also pause the advisor. **Enable LLM** starts it again. Closing the pa
 advisor enabled; closing the app stops it. A fresh app launch starts paused even when credentials
 are saved. Changing saved connection settings pauses the current advisor until explicitly enabled.
 
+**Insights** summarizes the current advisor session on Android and in the Windows monitor. It shows
+consultations, validated selections, engine action results, model errors, and reasons that observed
+choices stayed with Forge. It also counts unsupported alternative ability evaluations by family;
+these may still be selected through Forge's prepared move. Repeated evaluations count again, and
+these counters do not cover every decision in the engine. A validated selection is distinct from
+an action actually played. Combat reports separately whether Forge's declaration was preserved or
+an alternative was applied.
+
+Timing reports include the sample count, average, longest and total milliseconds for model replies,
+deck preparation, the worker queue and game-thread waiting. Game waiting includes the other stages,
+so timing rows overlap. Individual decision reports also record `queueMillis`. Insights contains
+aggregate labels and durations, not hands, prompts or credentials. It resets with a new advisor
+instance. The monitor throttles intermediate aggregate updates to avoid flooding the UI.
+
+Visible card context includes `token`, visible `attachmentIds`, and `attachedToId` for an Aura or
+Equipment attached to a visible card or player. These IDs link existing snapshot objects rather
+than exposing hidden card identities. Strategy notes, recent-event history and expanded activated
+ability enumeration are follow-up work; the first diagnostics increment does not add those paths.
+
 Combat alternatives are enumerated in scratch combat objects and validated using the engine's attack
 constraints and block validators before applying them. No candidate changes the live declaration
 during the request. Attack/block costs stay in Forge's prepared baseline; alternatives are cost-free.

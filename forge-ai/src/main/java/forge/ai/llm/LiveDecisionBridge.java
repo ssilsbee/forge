@@ -26,6 +26,7 @@ public final class LiveDecisionBridge {
     public interface Advisor {
         default boolean isEnabled() { return true; }
         default void prepare(Player player) { }
+        default void diagnostic(String category, String detail) { }
         String choose(Player player, JsonObject question) throws Exception;
         void status(String decisionId, String message);
     }
@@ -56,27 +57,41 @@ public final class LiveDecisionBridge {
 
     record Option(String id, String description, SpellAbility ability) { }
 
+    static void diagnostic(String category, String detail) {
+        Advisor active = advisor;
+        if (active != null && active.isEnabled()) { active.diagnostic(category, detail); }
+    }
+
     public static List<SpellAbility> choose(Player player, List<SpellAbility> baseline) {
         if (!enabled(player)) { return baseline; }
-        if (baseline != null && baseline.size() != 1) { return baseline; }
+        if (baseline != null && baseline.size() != 1) {
+            diagnostic("Forge handled action menus", "Prepared move contains multiple abilities"); return baseline;
+        }
         String decisionId = UUID.randomUUID().toString();
         try {
             List<Option> options = options(player, baseline);
-            if (options.size() < 2) { return baseline; }
+            if (options.size() < 2) {
+                diagnostic("Forge handled action menus", "No bounded alternative menu"); return baseline;
+            }
             String baselineId = baseline == null ? "pass" : "forge";
             JsonObject question = question(player, options, baselineId, decisionId,
                     "Live hybrid decision. Choose a listed legal move or pass. Forge's prepared move may include "
                     + "choices outside the enumerated alternatives. Combat and supported resolution choices are reviewed "
                     + "separately. Mana payment remains Forge-controlled. Current state and legal actions override the advisory deck plan.");
-            if (question == null) { return baseline; }
+            if (question == null) {
+                diagnostic("Forge handled action menus", "Snapshot outside supported scope"); return baseline;
+            }
+            diagnostic("Advisor consultations", "Action selection");
             String id = advisor.choose(player, question);
             Option selected = options.stream().filter(o -> o.id.equals(id)).findFirst().orElseThrow();
             if (player.getGame().isGameOver()) { throw new IllegalStateException("Game ended during request."); }
             if (selected.ability != null && !legal(selected.ability, player)) { throw new IllegalStateException("Move became unavailable."); }
+            diagnostic("Validated action selections", id.equals("forge") ? "Forge prepared move" : id.equals("pass") ? "Pass" : "Alternative");
             advisor.status(decisionId, selected.ability == null ? "Luna chose to pass priority." : "Validated selection: " + selected.description);
             if (selected.ability != null) { SELECTED.put(selected.ability, decisionId); }
             return selected.ability == null ? null : List.of(selected.ability);
         } catch (Exception e) {
+            diagnostic("Action fallback", e.getClass().getSimpleName());
             if (e instanceof InterruptedException) { Thread.currentThread().interrupt(); }
             advisor.status(decisionId, "Forge fallback: " + e.getClass().getSimpleName() + ". No model move applied.");
             return baseline;
@@ -109,7 +124,10 @@ public final class LiveDecisionBridge {
         List<Card> sources = new ArrayList<>(player.getCardsIn(ZoneType.Hand));
         sources.addAll(player.getCardsIn(ZoneType.Battlefield));
         for (Card card : sources) {
-            if (card.isFaceDown() || card.isDoubleFaced()) { continue; }
+            if (card.isFaceDown() || card.isDoubleFaced()) {
+                diagnostic("Alternative card evaluations omitted", card.isFaceDown() ? "Face-down source" : "Double-faced source");
+                continue;
+            }
             int index = 0;
             for (SpellAbility original : card.getSpellAbilities()) {
                 String key = "card-" + card.getId() + "-ability-" + index++;
@@ -123,10 +141,15 @@ public final class LiveDecisionBridge {
                 boolean permanent = card.isInZone(ZoneType.Hand) && card.isPermanent() && original.isSpell()
                         && !original.usesTargeting() && original.getSubAbility() == null
                         && !original.hasParam("CharmNum") && !card.getManaCost().toString().contains("X");
-                if (!land && !combo && !spell && !permanent) { continue; }
+                if (!land && !combo && !spell && !permanent) {
+                    diagnostic("Alternative ability evaluations omitted", "Unsupported family: " + original.getApi());
+                    continue;
+                }
                 if (original.usesTargeting()) {
                     if (original.getMinTargets() != 1 || original.getMaxTargets() != 1 || original.isDividedAsYouChoose()
-                            || original.getSubAbility() != null || original.hasParam("TargetingPlayer")) { continue; }
+                            || original.getSubAbility() != null || original.hasParam("TargetingPlayer")) {
+                        diagnostic("Alternative ability evaluations omitted", "Complex targeting or linked effects"); continue;
+                    }
                     int targetIndex = 0;
                     for (GameObject target : targets) {
                         SpellAbility copy = original.copy(player);
@@ -146,7 +169,9 @@ public final class LiveDecisionBridge {
                     SpellAbility copy = original.copy(player);
                     if (legal(copy, player)) { result.add(new Option(key, land ? "Play " + card.getName() : copy + "; cost: " + copy.getPayCosts(), copy)); }
                 }
-                if (result.size() > 48) { return baselineOnly(baseline); }
+                if (result.size() > 48) {
+                    diagnostic("Forge handled action menus", "Action alternatives exceed 48"); return baselineOnly(baseline);
+                }
             }
         }
         result.add(new Option("pass", "Pass priority.", null));
@@ -206,12 +231,18 @@ public final class LiveDecisionBridge {
     /** Shared bounded contract for combat and resolution choices; failures preserve the prepared baseline. */
     static String recommend(Player player, String kind, String scope, List<Option> options,
                             String baseline, JsonObject context) {
-        if (!enabled(player) || options.size() < 2) { return baseline; }
+        if (!enabled(player)) { return baseline; }
+        if (options.size() < 2) {
+            diagnostic("Forge handled choices", kind + ": no alternative"); return baseline;
+        }
         Advisor active = advisor;
         String id = UUID.randomUUID().toString();
         try {
             JsonObject input = question(player, options, baseline, id, scope);
-            if (input == null) { return baseline; }
+            if (input == null) {
+                diagnostic("Forge handled choices", kind + ": snapshot outside supported scope"); return baseline;
+            }
+            diagnostic("Advisor consultations", kind);
             input.addProperty("choiceKind", kind);
             input.add("choiceContext", context);
             String selected = active.choose(player, input);
@@ -219,9 +250,11 @@ public final class LiveDecisionBridge {
             if (options.stream().noneMatch(option -> option.id().equals(selected))) {
                 throw new IllegalArgumentException("Unlisted action ID.");
             }
+            diagnostic("Validated choices", kind + (selected.equals(baseline) ? ": Forge prepared choice" : ": alternative"));
             active.status(id, "Validated " + kind + " selection: " + selected);
             return selected;
         } catch (Exception e) {
+            diagnostic("Choice fallback", kind + ": " + e.getClass().getSimpleName());
             if (e instanceof InterruptedException) { Thread.currentThread().interrupt(); }
             active.status(id, "Forge fallback for " + kind + ": " + e.getClass().getSimpleName());
             return baseline;
@@ -229,6 +262,7 @@ public final class LiveDecisionBridge {
     }
 
     static void fallback(String kind, String reason) {
+        diagnostic("Forge handled choices", kind + ": " + reason);
         Advisor active = advisor;
         if (active != null && active.isEnabled()) { active.status("", "Forge handles " + kind + ": " + reason); }
     }
@@ -265,6 +299,7 @@ public final class LiveDecisionBridge {
     public static void executed(Player player, SpellAbility ability, boolean played) {
         String decisionId = SELECTED.remove(ability);
         if (enabled(player)) {
+            diagnostic("Engine action results", (decisionId == null ? "Forge" : "Advisor-selected") + (played ? ": played" : ": declined"));
             advisor.status(decisionId == null ? "" : decisionId,
                     (decisionId == null ? "Forge: " : "Luna: ")
                             + (played ? "engine played " : "engine declined ") + ability.getHostCard().getName());

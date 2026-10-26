@@ -142,6 +142,17 @@ public final class LandDecisionSnapshot {
         result.addProperty("controller", playerId(viewer.getGame(), card.getController()));
         result.addProperty("tapped", card.isTapped());
         result.addProperty("faceDown", card.isFaceDown());
+        result.addProperty("token", card.isToken());
+        JsonArray attachments = new JsonArray();
+        for (Card attachment : card.getAttachedCards()) {
+            if (attachment.getView().canBeShownTo(viewer.getView())) { attachments.add("card-" + attachment.getId()); }
+        }
+        result.add("attachmentIds", attachments);
+        if (card.getEntityAttachedTo() instanceof Card target && target.getView().canBeShownTo(viewer.getView())) {
+            result.addProperty("attachedToId", "card-" + target.getId());
+        } else if (card.getEntityAttachedTo() instanceof Player target) {
+            result.addProperty("attachedToId", playerId(viewer.getGame(), target));
+        }
         if (card.isFaceDown()) {
             result.addProperty("name", "Face-down card");
         } else {

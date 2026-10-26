@@ -46,12 +46,16 @@ public final class LiveChoiceBridge {
         boolean containsBaseline = baseline == null;
         for (T option : offered) {
             if (option instanceof Card card) {
-                if (!visible(card, player)) { return baseline; }
+                if (!visible(card, player)) {
+                    LiveDecisionBridge.diagnostic("Forge handled choices", "Single entity: offered identity is hidden"); return baseline;
+                }
                 cards.add(LandDecisionSnapshot.visibleCard(card, player));
             }
             if (option.equals(baseline)) { containsBaseline = true; }
             else { choices.add(option); }
-            if (choices.size() > MAX_CHOICES) { return baseline; }
+            if (choices.size() > MAX_CHOICES) {
+                LiveDecisionBridge.diagnostic("Forge handled choices", "Single entity: more than 128 choices"); return baseline;
+            }
         }
         if (!containsBaseline) { return baseline; }
         if (optional && baseline != null) { choices.add(null); }
@@ -71,10 +75,15 @@ public final class LiveChoiceBridge {
         if (!LiveDecisionBridge.enabled(player) || baseline == null || min < 0 || max < min) { return baseline; }
         List<Card> pool = new ArrayList<>(); JsonArray cardContext = new JsonArray();
         for (Card card : offered) {
-            if (!visible(card, player)) { return baseline; }
+            if (!visible(card, player)) {
+                LiveDecisionBridge.diagnostic("Forge handled choices", "Card set: offered identity is hidden"); return baseline;
+            }
             pool.add(card); cardContext.add(LandDecisionSnapshot.visibleCard(card, player));
         }
-        if (pool.size() > 16 || !pool.containsAll(baseline) || baseline.size() < min || baseline.size() > max) { return baseline; }
+        if (pool.size() > 16 || !pool.containsAll(baseline) || baseline.size() < min || baseline.size() > max) {
+            LiveDecisionBridge.diagnostic("Forge handled choices", "Card set: pool exceeds 16 or baseline is outside supplied bounds");
+            return baseline;
+        }
         List<CardCollectionView> choices = new ArrayList<>(); choices.add(baseline);
         try { subsets(pool, 0, min, Math.min(max, pool.size()), new CardCollection(), choices); }
         catch (Limit e) { LiveDecisionBridge.fallback(prompt, "too many card combinations"); return baseline; }
@@ -107,7 +116,11 @@ public final class LiveChoiceBridge {
 
     public static ImmutablePair<CardCollection, CardCollection> partition(Player player, CardCollection cards,
             ImmutablePair<CardCollection, CardCollection> baseline, boolean surveil) {
-        if (!LiveDecisionBridge.enabled(player) || cards.isEmpty() || cards.size() > 6) { return baseline; }
+        if (!LiveDecisionBridge.enabled(player)) { return baseline; }
+        if (cards.isEmpty() || cards.size() > 6) {
+            LiveDecisionBridge.diagnostic("Forge handled choices", (surveil ? "Surveil" : "Scry") + ": zero cards or more than six");
+            return baseline;
+        }
         List<ImmutablePair<CardCollection, CardCollection>> choices = new ArrayList<>(); choices.add(baseline);
         List<LiveDecisionBridge.Option> options = new ArrayList<>();
         String destination = surveil ? "graveyard" : "bottom of library";

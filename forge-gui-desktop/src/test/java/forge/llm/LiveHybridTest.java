@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.testng.Assert.*;
 
@@ -225,6 +226,13 @@ public class LiveHybridTest extends AITest {
             ProviderClient provider = new ProviderClient(ProviderClient.Provider.OPENROUTER,
                     URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/"), () -> "test-key");
             LivePlayLauncher launcher = new LivePlayLauncher(provider, "model", "high", Duration.ofSeconds(3), directory);
+            AtomicReference<String> displayedInsights = new AtomicReference<>();
+            launcher.setMonitor(new LiveAdvisor.Monitor() {
+                @Override public void request(String id, String instructions, JsonObject input) { }
+                @Override public void response(String id, JsonObject output) { }
+                @Override public void status(String id, String message) { }
+                @Override public void insights(String report) { displayedInsights.set(report); }
+            });
             LiveDecisionBridge.install(launcher);
             Game game = initAndCreateGame();
             Player player = position(game);
@@ -237,6 +245,10 @@ public class LiveHybridTest extends AITest {
             assertEquals(plans.get(), 1);
             assertEquals(reviews.get(), 4);
             assertTrue(launcher.isEnabled(), "A failed deck plan must not count as failed move requests.");
+            assertTrue(displayedInsights.get().contains("Game wait — Action selection: 4 samples"));
+            assertTrue(displayedInsights.get().contains("Model reply — Action selection: 4 samples"));
+            assertTrue(displayedInsights.get().contains("legal_recommendation: 4"));
+            assertFalse(displayedInsights.get().contains("test-key"));
             try (var files = Files.walk(directory.resolve("live"))) {
                 List<Path> reports = files.filter(p -> p.toString().endsWith(".json")).toList();
                 assertEquals(reports.size(), 4);
@@ -244,6 +256,7 @@ public class LiveHybridTest extends AITest {
                 assertEquals(report.get("mode").getAsString(), "live_hybrid");
                 assertEquals(report.getAsJsonObject("input").has("deckStrategy"), withPlan);
                 assertFalse(report.toString().contains("test-key"));
+                assertTrue(report.get("queueMillis").getAsLong() >= 0);
             }
             launcher.pause();
             assertNull(LiveDecisionBridge.choose(player, null));
@@ -271,6 +284,8 @@ public class LiveHybridTest extends AITest {
             Player player = position(initAndCreateGame());
             for (int i = 0; i < 4; i++) { assertNull(LiveDecisionBridge.choose(player, null)); }
             assertEquals(calls.get(), 4, "One deck-plan attempt plus three failed moves; the fourth move must stay paused.");
+            assertTrue(launcher.insights().contains("provider_error: 3"));
+            assertTrue(launcher.insights().contains("Failed; continuing without plan: 1"));
         } finally { server.stop(0); }
     }
 }

@@ -47,6 +47,8 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     private volatile Future<?> pending;
     private final List<Future<?>> preparations = new ArrayList<>(); // guarded by this
     private volatile Monitor monitor;
+    private final AdvisorDiagnostics diagnostics = new AdvisorDiagnostics();
+    private long lastInsights;
     private final AtomicInteger failures = new AtomicInteger();
     private static final class Budget { int turn = -1; int count; int choices; int total; }
 
@@ -64,9 +66,22 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         void response(String id, JsonObject output);
         void status(String id, String message);
         default boolean isDisplayThread() { return false; }
+        default void insights(String report) { }
     }
 
-    public void setMonitor(Monitor value) { monitor = value; }
+    public void setMonitor(Monitor value) { monitor = value; publishInsights(true); }
+    public String insights() { return diagnostics.render(); }
+    @Override public void diagnostic(String category, String detail) {
+        diagnostics.count(category, detail);
+        publishInsights(false);
+    }
+    private synchronized void publishInsights(boolean force) {
+        long now = System.nanoTime();
+        if (monitor != null && (force || now - lastInsights >= 250_000_000L)) {
+            lastInsights = now;
+            monitor.insights(diagnostics.render());
+        }
+    }
     @Override public boolean isEnabled() { return enabled.get(); }
     public void resumeLive() {
         failures.set(0);
@@ -115,7 +130,9 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         String deckHash = DeckStrategyPlanner.digest(deck.toString());
         JsonObject detached = question.deepCopy();
         String id = detached.get("decisionId").getAsString();
-        Future<String> task = worker.submit(() -> review(id, detached, deck, deckHash));
+        long queued = System.nanoTime();
+        String kind = detached.has("choiceKind") ? detached.get("choiceKind").getAsString() : "Action selection";
+        Future<String> task = worker.submit(() -> review(id, detached, deck, deckHash, queued, kind));
         pending = task;
         try {
             String selected = task.get(timeout.toSeconds() * 2 + 5, TimeUnit.SECONDS);
@@ -126,12 +143,18 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
             task.cancel(true);
             if (enabled.get() && failures.incrementAndGet() >= 3) { pause(); status(id, "Three requests failed. Luna paused; Forge continues."); }
             throw e;
-        } finally { pending = null; }
+        } finally {
+            pending = null;
+            diagnostics.time("Game wait — " + kind, (System.nanoTime() - queued) / 1_000_000);
+            publishInsights(true);
+        }
     }
 
     private JsonObject preparePlan(String id, JsonObject deck, String deckHash) throws IOException {
         JsonObject plan = plans.get(deckHash);
         if (!plans.containsKey(deckHash)) {
+            long started = System.nanoTime();
+            diagnostic("Deck preparation", "Attempted");
             plans.put(deckHash, null);
             String planId = id + " / deck plan";
             if (monitor != null) { monitor.request(planId, DeckStrategyPlanner.INSTRUCTIONS, deck); }
@@ -140,8 +163,10 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
                 plan = DeckStrategyPlanner.planInput(deck, directory.resolve("live-deck-plans"), provider, model, effort, timeout, 8192);
                 plans.put(deckHash, plan);
                 if (monitor != null) { monitor.response(planId, plan); }
+                diagnostic("Deck preparation", "Ready (generated or cached)");
                 status(planId, "Deck strategy ready for LLM decisions.");
             } catch (IOException | RuntimeException e) {
+                diagnostic("Deck preparation", Thread.currentThread().isInterrupted() ? "Cancelled" : "Failed; continuing without plan");
                 if (Thread.currentThread().isInterrupted()) { throw new IOException("Deck planning interrupted.", e); }
                 JsonObject error = new JsonObject();
                 error.addProperty("status", "deck_plan_failed");
@@ -149,17 +174,25 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
                 error.addProperty("continuingWithoutPlan", true);
                 if (monitor != null) { monitor.response(planId, error); }
                 status(planId, "Deck strategy unavailable; continuing LLM play without a deck plan.");
+            } finally {
+                diagnostics.time("Deck preparation (including cache lookup)", (System.nanoTime() - started) / 1_000_000);
+                publishInsights(true);
             }
         }
         return plan;
     }
 
-    private String review(String id, JsonObject question, JsonObject deck, String deckHash) throws IOException {
+    private String review(String id, JsonObject question, JsonObject deck, String deckHash, long queued, String kind) throws IOException {
+        long queueMillis = (System.nanoTime() - queued) / 1_000_000;
+        diagnostics.time("Worker queue", queueMillis);
         JsonObject plan = preparePlan(id, deck, deckHash);
         JsonObject input = plan == null ? question : DeckStrategyPlanner.attach(question, plan, deckHash);
         if (monitor != null) { monitor.request(id, ProviderClient.INSTRUCTIONS, input); }
         status(id, "Luna is choosing a move… Forge's display remains available.");
         JsonObject report = ShadowReview.review(provider, model, input, timeout, effort, 8192);
+        report.addProperty("queueMillis", queueMillis);
+        diagnostic("Model replies — " + kind, report.get("status").getAsString());
+        diagnostics.time("Model reply — " + kind, report.get("elapsedMillis").getAsLong());
         report.addProperty("mode", "live_hybrid");
         report.add("input", input);
         if (monitor != null) { monitor.response(id, report); }
@@ -174,5 +207,6 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
 
     @Override public void status(String id, String message) {
         if (monitor != null) { monitor.status(id, message); }
+        publishInsights(true);
     }
 }

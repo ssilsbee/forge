@@ -71,6 +71,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
     private String selected;
     private String latest = "LLM is paused. Choose a connection, test it, then enable LLM play.";
     private String account = "ChatGPT: not connected on this device";
+    private String insightReport = "Enable the advisor to collect gameplay timing and decision coverage.";
     private static final class Entry { String label, input, output = "Waiting for response…"; }
 
     public AndroidLlmController(Activity activity) {
@@ -105,7 +106,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         LinearLayout heading = row();
         TextView title = label("LLM Advisor", 22);
         LinearLayout tabs = row();
-        String[] names = {"Connect", "Input", "Output", "Status"};
+        String[] names = {"Connect", "Input", "Output", "Status", "Insights"};
         for (int i = 0; i < names.length; i++) {
             final int index = i;
             Button button = button(names[i], () -> renderTab(index));
@@ -164,7 +165,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         body.removeAllViews();
         history = null; text = null; accountInfo = null; provider = null; effort = null; model = null; apiKey = null;
         if (tab == 0) { renderSettings(); return; }
-        if (tab != 3) {
+        if (tab == 1 || tab == 2) {
             history = new Spinner(activity);
             boolean landscape = activity.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
             if (landscape) {
@@ -408,6 +409,14 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         });
     }
 
+    @Override public void insights(String report) {
+        activity.runOnUiThread(() -> {
+            if (closed) { return; }
+            insightReport = report;
+            if (tab == 4) { renderText(); }
+        });
+    }
+
     @Override public void status(String id, String message) {
         activity.runOnUiThread(() -> {
             if (closed) { return; }
@@ -431,6 +440,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
     private void renderText() {
         if (text == null) { return; }
         if (tab == 3) { text.setText(events.toString()); return; }
+        if (tab == 4) { text.setText(insightReport); return; }
         Entry entry = entries.get(selected);
         text.setText(entry == null ? "No requests yet. Use Test connection, or enable LLM and start a Constructed match."
                 : tab == 1 ? entry.input : entry.output);
