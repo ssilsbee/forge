@@ -88,6 +88,9 @@ public abstract class PlayerController {
         return false;
     }
 
+    /** Called after deck setup, before play/draw selection. Must not wait for background work. */
+    public void prepareForGame() { }
+
     public Game getGame() { return gameView.getGame(); }
     public Match getMatch() { return gameView.getMatch(); }
     public Player getPlayer() { return player; }

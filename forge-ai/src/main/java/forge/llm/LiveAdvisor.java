@@ -13,7 +13,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.WeakHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,6 +45,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     private final Map<String, JsonObject> plans = new HashMap<>();
     private final Map<Player, Budget> budgets = new WeakHashMap<>(); // game thread only
     private volatile Future<?> pending;
+    private final List<Future<?>> preparations = new ArrayList<>(); // guarded by this
     private volatile Monitor monitor;
     private final AtomicInteger failures = new AtomicInteger();
     private static final class Budget { int turn = -1; int count; int choices; int total; }
@@ -72,11 +76,30 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
 
     @Override public void close() { pause(); worker.shutdownNow(); }
 
-    public void pause() {
+    public synchronized void pause() {
         enabled.set(false);
         Future<?> task = pending;
         if (task != null) { task.cancel(true); }
+        for (Future<?> plan : preparations) { plan.cancel(true); }
+        preparations.clear();
         status("", "Luna paused. Forge is in control. Enable Luna to resume.");
+    }
+
+    @Override public synchronized void prepare(Player player) {
+        if (!enabled.get()) { return; }
+        try {
+            // Snapshot only the known unordered deck on the game thread, before any background work.
+            JsonObject deck = DeckStrategyPlanner.deckInput(player.getRegisteredPlayer().getDeck());
+            String deckHash = DeckStrategyPlanner.digest(deck.toString());
+            String id = "pregame-" + UUID.randomUUID();
+            preparations.removeIf(Future::isDone);
+            preparations.add(worker.submit(() -> {
+                if (!enabled.get()) { return null; }
+                return preparePlan(id, deck, deckHash);
+            }));
+        } catch (IOException e) {
+            status("", "Early deck preparation unavailable; LLM play will prepare on its first decision.");
+        }
     }
 
     @Override public String choose(Player player, JsonObject question) throws Exception {
@@ -106,7 +129,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         } finally { pending = null; }
     }
 
-    private String review(String id, JsonObject question, JsonObject deck, String deckHash) throws IOException {
+    private JsonObject preparePlan(String id, JsonObject deck, String deckHash) throws IOException {
         JsonObject plan = plans.get(deckHash);
         if (!plans.containsKey(deckHash)) {
             plans.put(deckHash, null);
@@ -117,6 +140,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
                 plan = DeckStrategyPlanner.planInput(deck, directory.resolve("live-deck-plans"), provider, model, effort, timeout, 8192);
                 plans.put(deckHash, plan);
                 if (monitor != null) { monitor.response(planId, plan); }
+                status(planId, "Deck strategy ready for LLM decisions.");
             } catch (IOException | RuntimeException e) {
                 if (Thread.currentThread().isInterrupted()) { throw new IOException("Deck planning interrupted.", e); }
                 JsonObject error = new JsonObject();
@@ -127,6 +151,11 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
                 status(planId, "Deck strategy unavailable; continuing LLM play without a deck plan.");
             }
         }
+        return plan;
+    }
+
+    private String review(String id, JsonObject question, JsonObject deck, String deckHash) throws IOException {
+        JsonObject plan = preparePlan(id, deck, deckHash);
         JsonObject input = plan == null ? question : DeckStrategyPlanner.attach(question, plan, deckHash);
         if (monitor != null) { monitor.request(id, ProviderClient.INSTRUCTIONS, input); }
         status(id, "Luna is choosing a move… Forge's display remains available.");

@@ -923,6 +923,11 @@ public class PlayerControllerAi extends PlayerController {
     }
 
     @Override
+    public void prepareForGame() {
+        forge.ai.llm.LiveDecisionBridge.prepare(player);
+    }
+
+    @Override
     public Player chooseStartingPlayer(boolean isFirstGame) {
         return this.player; // AI is brave :)
     }

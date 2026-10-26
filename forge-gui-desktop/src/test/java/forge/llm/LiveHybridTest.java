@@ -6,6 +6,7 @@ import forge.ai.AITest;
 import forge.ai.llm.LiveDecisionBridge;
 import forge.ai.simulation.GameCopier;
 import forge.game.Game;
+import forge.game.GameStage;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
@@ -19,6 +20,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.testng.Assert.*;
@@ -137,7 +141,61 @@ public class LiveHybridTest extends AITest {
         assertLivePlanResponse(plan.toString(), false);
     }
 
+    public void failedPregamePlanStillAllowsMovesWithoutRetrying() throws Exception {
+        assertLivePlanResponse("not a JSON plan", false, true);
+    }
+
+    public void pregamePlanningDoesNotBlockSetupAndIsReusedByTheFirstMove() throws Exception {
+        CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
+        AtomicInteger plans = new AtomicInteger(), reviews = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            JsonObject request = LlmHttp.object(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            String instructions = request.getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString();
+            JsonObject input = LlmHttp.object(request.getAsJsonArray("messages").get(1).getAsJsonObject().get("content").getAsString());
+            String response;
+            if (instructions.contains("pregame strategy")) {
+                plans.incrementAndGet();
+                assertTrue(input.has("mainDeck"));
+                assertFalse(input.has("players")); assertFalse(input.has("hand")); assertFalse(input.has("libraryOrder"));
+                started.countDown();
+                try { assertTrue(release.await(10, TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); exchange.close(); return; }
+                response = "{\"strategy\":\"Preserve resources.\",\"cautions\":\"Use the actual board.\"}";
+            } else {
+                reviews.incrementAndGet();
+                assertTrue(input.has("deckStrategy"));
+                response = "{\"actionId\":\"pass\",\"reason\":\"Wait for this test.\"}";
+            }
+            JsonObject message = new JsonObject(); message.addProperty("content", response);
+            byte[] body = ("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":" + message + "}]}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+        });
+        server.start();
+        ProviderClient provider = new ProviderClient(ProviderClient.Provider.OPENROUTER,
+                URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/"), () -> "test-key");
+        try (LiveAdvisor launcher = new LiveAdvisor(provider, "model", "high", Duration.ofSeconds(5),
+                Files.createTempDirectory(Path.of("target"), "live-prefetch-"))) {
+            LiveDecisionBridge.install(launcher);
+            Game game = initAndCreateGame(); Player player = position(game);
+            game.setAge(GameStage.BeforeMulligan);
+            // The controller must return while the provider is deliberately held open.
+            CompletableFuture.runAsync(() -> player.getController().prepareForGame()).get(2, TimeUnit.SECONDS);
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            assertEquals(game.getAge(), GameStage.BeforeMulligan); assertEquals(reviews.get(), 0);
+            player.getController().prepareForGame(); // Duplicate startup notification must reuse the same plan.
+            release.countDown();
+            game.setAge(GameStage.Play);
+            assertNull(LiveDecisionBridge.choose(player, null));
+            assertEquals(plans.get(), 1); assertEquals(reviews.get(), 1);
+        } finally { release.countDown(); server.stop(0); }
+    }
+
     private void assertLivePlanResponse(String planResponse, boolean withPlan) throws Exception {
+        assertLivePlanResponse(planResponse, withPlan, false);
+    }
+
+    private void assertLivePlanResponse(String planResponse, boolean withPlan, boolean prefetch) throws Exception {
         AtomicInteger plans = new AtomicInteger();
         AtomicInteger reviews = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -170,6 +228,11 @@ public class LiveHybridTest extends AITest {
             LiveDecisionBridge.install(launcher);
             Game game = initAndCreateGame();
             Player player = position(game);
+            if (prefetch) {
+                game.setAge(GameStage.BeforeMulligan);
+                player.getController().prepareForGame();
+                game.setAge(GameStage.Play);
+            }
             for (int i = 0; i < 4; i++) { assertNull(LiveDecisionBridge.choose(player, null)); }
             assertEquals(plans.get(), 1);
             assertEquals(reviews.get(), 4);

@@ -28,8 +28,11 @@ into the masked key field. **Save settings** stores it locally. A blank field ke
 **Test connection** sends one small request to the selected model using its provider allowance.
 Its exact instructions, input, final answer, latency and usage appear in the monitor. After a
 successful test, **Enable LLM** checks model availability and opts the current launch into LLM play.
-Start a normal local Constructed match with one human and one AI. Deck analysis runs on the first
-supported choice, and the resulting compact strategy accompanies later choices. Suggested plan
+Start a normal local Constructed match with one human and one AI. Deck analysis starts in the
+background after deck setup, before play/draw selection, overlapping that choice and mulligans.
+The first supported decision reuses the same analysis (waiting for it if still running), and the
+resulting compact strategy accompanies later choices. If the advisor is enabled after startup,
+analysis starts with the first supported choice. Suggested plan
 lengths are soft targets; valid plans up to 12,000 total characters are accepted. If planning fails,
 the same move and later moves still use the LLM without deck strategy context. Planning is attempted
 once per deck in the current advisor session, so a failed plan does not repeatedly fill the turn list

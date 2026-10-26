@@ -25,6 +25,7 @@ import java.util.WeakHashMap;
 public final class LiveDecisionBridge {
     public interface Advisor {
         default boolean isEnabled() { return true; }
+        default void prepare(Player player) { }
         String choose(Player player, JsonObject question) throws Exception;
         void status(String decisionId, String message);
     }
@@ -34,11 +35,23 @@ public final class LiveDecisionBridge {
     public static void install(Advisor value) { advisor = value; }
 
     static boolean enabled(Player player) {
+        return supported(player) && player.getGame().getAge() == GameStage.Play;
+    }
+
+    private static boolean supported(Player player) {
         return advisor != null && advisor.isEnabled() && player.getGame().getMaingame() == null
                 && !player.getGame().isNoGUIUser() && !player.getGame().isGameOver()
-                && player.getGame().getAge() == GameStage.Play
                 && player.getGame().getRules().getGameType() == GameType.Constructed
                 && player.getGame().getPlayers().size() == 2;
+    }
+
+    public static void prepare(Player player) {
+        if (!supported(player)) { return; }
+        Advisor active = advisor;
+        try { active.prepare(player); }
+        catch (RuntimeException e) {
+            active.status("", "Early deck preparation unavailable; LLM play will prepare on its first decision.");
+        }
     }
 
     record Option(String id, String description, SpellAbility ability) { }

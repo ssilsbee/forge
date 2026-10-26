@@ -2344,6 +2344,7 @@ public class GameAction {
         startGame(lastGameOutcome, null);
     }
     public void startGame(GameOutcome lastGameOutcome, Runnable startGameHook) {
+        for (Player player : game.getPlayers()) { player.getController().prepareForGame(); }
         Player first = determineFirstTurnPlayer(lastGameOutcome);
 
         GameType gameType = game.getRules().getGameType();
