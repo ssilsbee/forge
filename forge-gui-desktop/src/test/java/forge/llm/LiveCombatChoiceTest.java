@@ -211,6 +211,21 @@ public class LiveCombatChoiceTest extends AITest {
         assertEquals(requests.get(), 1); assertTrue(combat.getAttackers().isEmpty());
     }
 
+    public void invalidatedCombatSelectionRejectsItsPendingNotes() {
+        Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1);
+        Card bear = ready("Grizzly Bears", ai); Combat combat = combat(game, ai);
+        java.util.concurrent.atomic.AtomicReference<Boolean> accepted = new java.util.concurrent.atomic.AtomicReference<>();
+        LiveDecisionBridge.install(new LiveDecisionBridge.Advisor() {
+            @Override public String choose(Player player, JsonObject input) {
+                String id = select(input, "Grizzly Bears"); bear.setTapped(true); return id;
+            }
+            @Override public void status(String id, String message) { }
+            @Override public void completed(String id, boolean applied) { accepted.set(applied); }
+        });
+        LiveCombatBridge.attackers(ai, combat);
+        assertEquals(accepted.get(), Boolean.FALSE); assertTrue(combat.getAttackers().isEmpty());
+    }
+
     public void invalidResponseAndProviderFailureKeepTheExactPreparedCombat() {
         Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1), opponent = game.getPlayers().get(0);
         Card bear = ready("Grizzly Bears", ai); Combat combat = combat(game, ai); combat.addAttacker(bear, opponent);

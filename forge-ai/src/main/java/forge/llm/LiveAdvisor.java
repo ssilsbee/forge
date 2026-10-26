@@ -22,6 +22,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -43,6 +44,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     private final AtomicBoolean enabled = new AtomicBoolean(true);
     // Worker only. A null value records a failed attempt so later moves do not retry planning.
     private final Map<String, JsonObject> plans = new HashMap<>();
+    private final StrategyMemory memory = new StrategyMemory(); // worker only
     private final Map<Player, Budget> budgets = new WeakHashMap<>(); // game thread only
     private volatile Future<?> pending;
     private final List<Future<?>> preparations = new ArrayList<>(); // guarded by this
@@ -50,7 +52,18 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     private final AdvisorDiagnostics diagnostics = new AdvisorDiagnostics();
     private long lastInsights;
     private final AtomicInteger failures = new AtomicInteger();
-    private static final class Budget { int turn = -1; int count; int choices; int total; }
+    private static final class Budget {
+        final String memoryKey = UUID.randomUUID().toString();
+        int turn = -1; int count; int choices; int total;
+    }
+
+    @Override public void completed(String decisionId, boolean accepted) {
+        try {
+            worker.execute(() -> {
+                if (memory.complete(decisionId, accepted)) { diagnostic("Strategy notes", "Updated after accepted choice"); }
+            });
+        } catch (RejectedExecutionException ignored) { /* Closing an advisor discards its session memory. */ }
+    }
 
     public LiveAdvisor(ProviderClient provider, String model, String effort, Duration timeout, Path directory) {
         this.provider = provider;
@@ -132,7 +145,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         String id = detached.get("decisionId").getAsString();
         long queued = System.nanoTime();
         String kind = detached.has("choiceKind") ? detached.get("choiceKind").getAsString() : "Action selection";
-        Future<String> task = worker.submit(() -> review(id, detached, deck, deckHash, queued, kind));
+        Future<String> task = worker.submit(() -> review(id, detached, deck, deckHash, queued, kind, budget.memoryKey, turn));
         pending = task;
         try {
             String selected = task.get(timeout.toSeconds() * 2 + 5, TimeUnit.SECONDS);
@@ -182,10 +195,12 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         return plan;
     }
 
-    private String review(String id, JsonObject question, JsonObject deck, String deckHash, long queued, String kind) throws IOException {
+    private String review(String id, JsonObject question, JsonObject deck, String deckHash, long queued, String kind,
+                          String memoryKey, int turn) throws IOException {
         long queueMillis = (System.nanoTime() - queued) / 1_000_000;
         diagnostics.time("Worker queue", queueMillis);
         JsonObject plan = preparePlan(id, deck, deckHash);
+        memory.attach(question, memoryKey, turn);
         JsonObject input = plan == null ? question : DeckStrategyPlanner.attach(question, plan, deckHash);
         if (monitor != null) { monitor.request(id, ProviderClient.INSTRUCTIONS, input); }
         status(id, "Luna is choosing a move… Forge's display remains available.");
@@ -200,6 +215,9 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         if (!"legal_recommendation".equals(report.get("status").getAsString())) {
             status(id, "Forge fallback: " + report.get("status").getAsString() + "; " + report.get("error").getAsString());
             throw new IOException("Model request did not produce a legal recommendation.");
+        }
+        if (report.has("strategyNotes")) {
+            memory.propose(memoryKey, id, turn, report.get("strategyNotes").getAsString());
         }
         status(id, "Received in " + report.get("elapsedMillis") + " ms: " + report.get("reason").getAsString());
         return report.get("recommendedActionId").getAsString();

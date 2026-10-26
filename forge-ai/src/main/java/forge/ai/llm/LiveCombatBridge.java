@@ -33,6 +33,7 @@ public final class LiveCombatBridge {
             LiveDecisionBridge.fallback("attackers", "banding declaration"); return;
         }
         Map<Card, GameEntity> baseline = new LinkedHashMap<>(combat.getAttackersAndDefenders());
+        JsonObject context = new JsonObject();
         try {
             List<Card> creatures = new ArrayList<>();
             Map<Card, List<GameEntity>> targets = new LinkedHashMap<>();
@@ -49,7 +50,6 @@ public final class LiveCombatBridge {
             int minimum = combat.getAttackConstraints().getLegalAttackers().getRight();
             enumerateAttacks(combat, creatures, targets, 0, new LinkedHashMap<>(), minimum, plans, new Search());
             List<LiveDecisionBridge.Option> options = new ArrayList<>();
-            JsonObject context = new JsonObject();
             JsonObject declarations = new JsonObject();
             for (int i = 0; i < plans.size(); i++) {
                 String id = i == 0 ? "forge" : "attack-" + i;
@@ -62,6 +62,7 @@ public final class LiveCombatBridge {
                     + "Unlisted creatures stay back. Forge's baseline may include attack costs; alternatives do not require paying attack costs. "
                     + "All alternative declarations satisfy the engine's attack requirements and restrictions.", options, "forge", context);
             if (selected.equals("forge")) {
+                LiveDecisionBridge.completed(context, true);
                 LiveDecisionBridge.diagnostic("Combat declarations", "Attackers: kept Forge declaration"); return;
             }
             Map<Card, GameEntity> plan = plans.get(Integer.parseInt(selected.substring(7)));
@@ -69,11 +70,14 @@ public final class LiveCombatBridge {
             try {
                 applyAttackers(combat, plan);
                 if (!CombatUtil.validateAttackers(combat)) { throw new IllegalStateException("Attack validation failed."); }
+                LiveDecisionBridge.completed(context, true);
                 LiveDecisionBridge.diagnostic("Combat declarations", "Attackers: applied alternative");
             } catch (RuntimeException e) { applyAttackers(combat, baseline); throw e; }
         } catch (Limit e) {
+            LiveDecisionBridge.completed(context, false);
             LiveDecisionBridge.fallback("attackers", "combat exceeds the bounded declaration search");
         } catch (RuntimeException e) {
+            LiveDecisionBridge.completed(context, false);
             LiveDecisionBridge.fallback("attackers", e.getClass().getSimpleName());
         }
     }
@@ -118,6 +122,7 @@ public final class LiveCombatBridge {
             LiveDecisionBridge.fallback("blockers", "banding declaration"); return;
         }
         List<Block> baseline = blocks(combat, defender);
+        JsonObject context = new JsonObject();
         try {
             Combat scratch = emptyBlocks(combat);
             List<Card> blockers = new ArrayList<>(defender.getCreaturesInPlay());
@@ -128,7 +133,7 @@ public final class LiveCombatBridge {
             List<List<Block>> plans = new ArrayList<>(); plans.add(baseline);
             enumerateBlocks(scratch, defender, attackers, blockers, 0, 0, plans, new Search());
             List<LiveDecisionBridge.Option> options = new ArrayList<>();
-            JsonObject context = new JsonObject(); JsonObject declarations = new JsonObject();
+            JsonObject declarations = new JsonObject();
             for (int i = 0; i < plans.size(); i++) {
                 String id = i == 0 ? "forge" : "block-" + i;
                 String description = plans.get(i).isEmpty() ? "Do not block." : "Block: " + plans.get(i).stream()
@@ -143,6 +148,7 @@ public final class LiveCombatBridge {
                     + "Forge's baseline may pay block costs; alternatives do not. Engine restrictions, including menace and mandatory blocks, are validated.",
                     options, "forge", context);
             if (selected.equals("forge")) {
+                LiveDecisionBridge.completed(context, true);
                 LiveDecisionBridge.diagnostic("Combat declarations", "Blockers: kept Forge declaration"); return;
             }
             List<Block> plan = plans.get(Integer.parseInt(selected.substring(6)));
@@ -152,11 +158,14 @@ public final class LiveCombatBridge {
             try {
                 applyBlockers(combat, defender, plan);
                 if (CombatUtil.validateBlocks(combat, defender) != null) { throw new IllegalStateException("Block validation failed."); }
+                LiveDecisionBridge.completed(context, true);
                 LiveDecisionBridge.diagnostic("Combat declarations", "Blockers: applied alternative");
             } catch (RuntimeException e) { applyBlockers(combat, defender, baseline); throw e; }
         } catch (Limit e) {
+            LiveDecisionBridge.completed(context, false);
             LiveDecisionBridge.fallback("blockers", "combat exceeds the bounded declaration search");
         } catch (RuntimeException e) {
+            LiveDecisionBridge.completed(context, false);
             LiveDecisionBridge.fallback("blockers", e.getClass().getSimpleName());
         }
     }

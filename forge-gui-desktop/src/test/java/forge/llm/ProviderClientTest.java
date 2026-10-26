@@ -98,6 +98,21 @@ public class ProviderClientTest {
         }
     }
 
+    @Test public void optionalStrategyNotesNeverInvalidateALegalMoveWhenMalformed() throws Exception {
+        for (int variant = 0; variant < 3; variant++) {
+            JsonObject answer = new JsonObject(); answer.addProperty("actionId", "land-b"); answer.addProperty("reason", "Reserve resources.");
+            if (variant == 0) { answer.addProperty("strategyNotes", "Keep protection available if the opponent threatens the combo."); }
+            if (variant == 1) { answer.addProperty("strategyNotes", "x".repeat(StrategyMemory.MAX_CHARACTERS + 1)); }
+            if (variant == 2) { answer.addProperty("strategyNotes", 42); }
+            JsonObject input = snapshot(); input.addProperty("strategyNotesRequested", true);
+            try (Server server = new Server(200, openRouter(answer.toString(), "stop"), 0)) {
+                JsonObject report = ShadowReview.review(server.client(ProviderClient.Provider.OPENROUTER), "model", input, Duration.ofSeconds(5));
+                assertEquals(report.get("status").getAsString(), "legal_recommendation");
+                assertEquals(report.has("strategyNotes"), variant == 0);
+            }
+        }
+    }
+
     @Test
     public void streamMustReachCompletedAndErrorsDoNotExposeSecrets() throws Exception {
         String delta = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{}\"}\n\n";

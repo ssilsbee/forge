@@ -59,8 +59,30 @@ instance. The monitor throttles intermediate aggregate updates to avoid flooding
 
 Visible card context includes `token`, visible `attachmentIds`, and `attachedToId` for an Aura or
 Equipment attached to a visible card or player. These IDs link existing snapshot objects rather
-than exposing hidden card identities. Strategy notes, recent-event history and expanded activated
-ability enumeration are follow-up work; the first diagnostics increment does not add those paths.
+than exposing hidden card identities.
+
+Live requests set `strategyNotesRequested`. The model may return a conditional `strategyNotes`
+memo (suggested 600 characters, hard maximum 2,000) alongside its action and reason. Input shows
+accepted prior notes in `strategyMemory`; Output shows proposed notes and their status. Invalid
+optional notes are ignored without rejecting a valid move. Empty notes clear memory after acceptance;
+omitting notes retains the previous memo until it expires. Notes are isolated per AI player and
+game, expire after more than four game turns, and reset with a new advisor instance. They are intent,
+not an event history or proof that a spell resolved. Recent observed-event history remains future work.
+
+Notes for played actions are committed only when the engine reports success; rejected selections
+or declined plays discard the proposal. Passes and resolution choices commit at the validated
+selection handoff. Combat commits only after its declaration is applied and revalidated, or Forge's
+prepared declaration is retained. The next request never promotes an unconfirmed prior proposal.
+Memory updates use the existing worker and do not send an extra model request.
+
+Additional battlefield activation alternatives support draw, damage, life gain, pump, destroy,
+tap, untap and attach effects. New alternatives must have ordinary costs with no X, no linked
+sub-ability or modal selector, and either no targets or exactly one target. Timing, affordability,
+targets and summoning sickness are engine-checked. This includes straightforward effects such as
+Jayemdae Tome, Prodigal Pyromancer and Bonesplitter's equip. Mana payment and any remaining cost
+choices stay with Forge. Double-faced sources, more complex activation structures and effects outside
+these families retain the prior fallback behavior. Candidates now include structured source IDs,
+costs, effect types and target IDs, in addition to their descriptions.
 
 Combat alternatives are enumerated in scratch combat objects and validated using the engine's attack
 constraints and block validators before applying them. No candidate changes the live declaration

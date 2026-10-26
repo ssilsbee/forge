@@ -53,7 +53,9 @@ public final class ShadowReview {
         report.addProperty("responseText", completion.text().substring(0, Math.min(completion.text().length(), 4096)));
         try {
             JsonObject answer = LlmHttp.object(completion.text());
-            if (answer.size() != 2 || !answer.has("actionId") || !answer.has("reason")
+            boolean notesAllowed = snapshot.has("strategyNotesRequested") && snapshot.get("strategyNotesRequested").getAsBoolean();
+            int expectedFields = notesAllowed && answer.has("strategyNotes") ? 3 : 2;
+            if (answer.size() != expectedFields || !answer.has("actionId") || !answer.has("reason")
                     || !answer.get("actionId").isJsonPrimitive() || !answer.get("actionId").getAsJsonPrimitive().isString()
                     || !answer.get("reason").isJsonPrimitive() || !answer.get("reason").getAsJsonPrimitive().isString()) {
                 throw new IOException("Expected actionId and reason strings.");
@@ -67,6 +69,17 @@ public final class ShadowReview {
             report.addProperty("recommendedActionId", selected);
             report.addProperty("agreesWithBaseline", baseline.equals(selected));
             report.addProperty("reason", reason);
+            if (notesAllowed && answer.has("strategyNotes")) {
+                var notes = answer.get("strategyNotes");
+                if (notes.isJsonPrimitive() && notes.getAsJsonPrimitive().isString()
+                        && notes.getAsString().length() <= StrategyMemory.MAX_CHARACTERS) {
+                    report.addProperty("strategyNotes", notes.getAsString());
+                    report.addProperty("notesStatus", "proposed_pending_engine_acceptance");
+                } else {
+                    // Bad optional notes must not discard an otherwise legal move.
+                    report.addProperty("notesStatus", "ignored_invalid_or_overlong");
+                }
+            }
         } catch (IOException | RuntimeException e) {
             report.addProperty("status", "invalid_response");
             report.addProperty("error", "The model did not return a valid captured action and explanation.");
