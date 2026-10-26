@@ -3,6 +3,7 @@ package forge.app.llm;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -100,13 +101,9 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         LinearLayout root = column();
         root.setPadding(dp(12), dp(8), dp(12), dp(8));
         root.setBackgroundColor(Color.rgb(22, 28, 34));
+        boolean landscape = activity.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
         LinearLayout heading = row();
         TextView title = label("LLM Advisor", 22);
-        heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        heading.addView(button("Back to game", () -> dialog.dismiss()));
-        root.addView(heading);
-        summary = label(latest, 13);
-        root.addView(summary);
         LinearLayout tabs = row();
         String[] names = {"Connect", "Input", "Output", "Status"};
         for (int i = 0; i < names.length; i++) {
@@ -114,9 +111,26 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
             Button button = button(names[i], () -> renderTab(index));
             button.setTextSize(12);
             button.setPadding(0, 0, 0, 0);
-            tabs.addView(button, new LinearLayout.LayoutParams(0, dp(45), 1));
+            button.setMinimumHeight(0);
+            tabs.addView(button, new LinearLayout.LayoutParams(0, dp(landscape ? 42 : 45), 1));
         }
-        root.addView(tabs);
+        if (landscape) {
+            title.setTextSize(20);
+            heading.addView(title, new LinearLayout.LayoutParams(-2, -2));
+            heading.addView(tabs, new LinearLayout.LayoutParams(0, dp(42), 1));
+            Button back = button("Back to game", () -> dialog.dismiss());
+            back.setTextSize(12);
+            back.setPadding(dp(4), 0, dp(4), 0);
+            back.setMinimumHeight(0);
+            heading.addView(back, new LinearLayout.LayoutParams(-2, dp(42)));
+        } else {
+            heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+            heading.addView(button("Back to game", () -> dialog.dismiss()));
+        }
+        root.addView(heading);
+        summary = label(latest, 13);
+        root.addView(summary);
+        if (!landscape) { root.addView(tabs); }
         body = column();
         root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout controls = row();
@@ -141,7 +155,14 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         if (tab == 0) { renderSettings(); return; }
         if (tab != 3) {
             history = new Spinner(activity);
-            body.addView(history);
+            boolean landscape = activity.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+            if (landscape) {
+                history.setPadding(0, 0, 0, 0);
+                history.setMinimumHeight(0);
+                body.addView(history, new LinearLayout.LayoutParams(-1, dp(48)));
+            } else {
+                body.addView(history);
+            }
             updateHistory();
             history.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                 @Override public void onItemSelected(AdapterView<?> p, View v, int position, long id) {
