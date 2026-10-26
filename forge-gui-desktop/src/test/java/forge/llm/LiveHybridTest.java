@@ -242,7 +242,8 @@ public class LiveHybridTest extends AITest {
                 player.getController().prepareForGame();
                 game.setAge(GameStage.Play);
             }
-            for (int i = 0; i < 4; i++) { assertNull(LiveDecisionBridge.choose(player, null)); }
+            List<SpellAbility> baseline = List.of(player.getCardsIn(ZoneType.Hand).get(0).getFirstSpellAbility().copy(player));
+            for (int i = 0; i < 4; i++) { assertNull(LiveDecisionBridge.choose(player, baseline)); }
             assertEquals(plans.get(), 1);
             assertEquals(reviews.get(), 4);
             assertTrue(launcher.isEnabled(), "A failed deck plan must not count as failed move requests.");
@@ -296,13 +297,86 @@ public class LiveHybridTest extends AITest {
             LiveDecisionBridge.executed(player, rejected.get(0), false);
             List<SpellAbility> accepted = LiveDecisionBridge.choose(player, null); assertNotNull(accepted);
             player.getController().playChosenSpellAbility(accepted.get(0));
-            assertNull(LiveDecisionBridge.choose(player, null)); assertNull(LiveDecisionBridge.choose(player, null));
+            SpellAbility copy = findCardWithName(player.getGame(), "Thespian's Stage").getSpellAbilities().stream()
+                    .filter(sa -> sa.getApi() == forge.game.ability.ApiType.Clone).findFirst().orElseThrow().copy(player);
+            copy.getTargets().add(findCardWithName(player.getGame(), "Dark Depths"));
+            assertNull(LiveDecisionBridge.choose(player, List.of(copy))); assertNull(LiveDecisionBridge.choose(player, List.of(copy)));
             assertEquals(inputs.size(), 4);
             assertFalse(inputs.get(0).has("strategyMemory")); assertFalse(inputs.get(1).has("strategyMemory"));
             assertEquals(inputs.get(2).getAsJsonObject("strategyMemory").get("notes").getAsString(), "Keep protection available.");
             assertFalse(inputs.get(2).toString().contains("Rejected intent."));
             assertFalse(inputs.get(3).has("strategyMemory"));
         } finally { server.stop(0); }
+    }
+
+    public void quietPolicySkipsNetworkCallsButStillReviewsForgeActionsAndNextTurn() throws Exception {
+        AtomicInteger reviews = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            JsonObject request = LlmHttp.object(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            boolean plan = request.getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString().contains("pregame strategy");
+            String answer = "{\"strategy\":\"Play aggressively.\",\"cautions\":\"Respect legality.\"}";
+            if (!plan) {
+                reviews.incrementAndGet();
+                JsonObject input = LlmHttp.object(request.getAsJsonArray("messages").get(1).getAsJsonObject().get("content").getAsString());
+                assertTrue(input.get("consultationPolicyRequested").getAsBoolean());
+                answer = "{\"actionId\":\"pass\",\"reason\":\"Save resources.\",\"consultationPolicy\":{\"watch\":[]}}";
+            }
+            JsonObject message = new JsonObject(); message.addProperty("content", answer);
+            byte[] body = ("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":" + message + "}]}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+        });
+        server.start();
+        ProviderClient provider = new ProviderClient(ProviderClient.Provider.OPENROUTER,
+                URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/"), () -> "test-key");
+        try (LiveAdvisor launcher = new LiveAdvisor(provider, "model", "high", Duration.ofSeconds(3),
+                Files.createTempDirectory(Path.of("target"), "live-consultation-"))) {
+            LiveDecisionBridge.install(launcher); Game game = initAndCreateGame(); Player player = position(game);
+            assertNull(LiveDecisionBridge.choose(player, null)); assertEquals(reviews.get(), 1);
+            assertNull(LiveDecisionBridge.choose(player, null)); assertEquals(reviews.get(), 1);
+            game.getPhaseHandler().devModeSet(forge.game.phase.PhaseType.MAIN2, player, 1);
+            assertNull(LiveDecisionBridge.choose(player, null)); assertEquals(reviews.get(), 1);
+            Player opponent = game.getPlayers().stream().filter(p -> p != player).findFirst().orElseThrow();
+            game.getPhaseHandler().devModeSet(forge.game.phase.PhaseType.END_OF_TURN, opponent, 2);
+            assertNull(LiveDecisionBridge.choose(player, null)); assertEquals(reviews.get(), 1);
+            game.getPhaseHandler().devModeSet(forge.game.phase.PhaseType.MAIN1, player, 3);
+            assertNull(LiveDecisionBridge.choose(player, null)); assertEquals(reviews.get(), 2);
+            List<SpellAbility> baseline = List.of(player.getCardsIn(ZoneType.Hand).get(0).getFirstSpellAbility().copy(player));
+            assertNull(LiveDecisionBridge.choose(player, baseline)); assertEquals(reviews.get(), 3);
+            assertTrue(launcher.insights().contains("Skipped: Forge passes"));
+            assertTrue(launcher.insights().contains("Updated after accepted choice"));
+        } finally { server.stop(0); }
+    }
+
+    public void realCounterspellCandidateTriggersARequestedReactiveWindow() throws Exception {
+        Game game = initAndCreateGame(); Player player = position(game);
+        addCardToZone("Counterspell", player, ZoneType.Hand);
+        ConsultationScheduler scheduler = new ConsultationScheduler(); AtomicInteger calls = new AtomicInteger();
+        AtomicReference<String> reason = new AtomicReference<>();
+        LiveDecisionBridge.install(new LiveDecisionBridge.Advisor() {
+            @Override public boolean shouldReview(Player p, JsonObject q) throws Exception {
+                var verdict = scheduler.consider("control", q); reason.set(verdict.reason()); return verdict.consult();
+            }
+            @Override public String choose(Player p, JsonObject q) throws Exception {
+                calls.incrementAndGet(); scheduler.register("control", q);
+                scheduler.propose(q.get("decisionId").getAsString(), LlmHttp.object("{\"watch\":[\"counterspell_window\"]}"));
+                if (calls.get() == 2) {
+                    assertTrue(q.getAsJsonArray("candidates").asList().stream().anyMatch(c -> c.getAsJsonObject().has("effect")
+                            && c.getAsJsonObject().get("effect").getAsString().equals("Counter")));
+                    assertTrue(q.getAsJsonArray("stack").get(0).getAsJsonObject().get("isSpell").getAsBoolean());
+                }
+                return "pass";
+            }
+            @Override public void completed(String id, boolean accepted) { scheduler.complete(id, accepted); }
+            @Override public void status(String id, String message) { }
+        });
+        assertNull(LiveDecisionBridge.choose(player, null)); assertEquals(calls.get(), 1);
+        Player opponent = game.getPlayers().stream().filter(p -> p != player).findFirst().orElseThrow();
+        game.getPhaseHandler().devModeSet(forge.game.phase.PhaseType.MAIN1, opponent, 2);
+        var creature = addCardToZone("Grizzly Bears", opponent, ZoneType.Hand);
+        game.getStack().add(creature.getFirstSpellAbility().copy(opponent)); game.getPhaseHandler().setPriority(player);
+        assertNull(LiveDecisionBridge.choose(player, null)); assertEquals(calls.get(), 2);
+        assertEquals(reason.get(), "Requested counterspell window with a legal counter");
     }
 
     public void repeatedProviderFailuresPauseLiveRequestsAndKeepForgePlaying() throws Exception {

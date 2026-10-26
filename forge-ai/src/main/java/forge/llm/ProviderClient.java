@@ -29,7 +29,18 @@ public final class ProviderClient {
             + "reservations, priorities and conditions for changing plans. Do not write a reasoning transcript or "
             + "claim that proposed actions or unresolved spells have completed. Existing strategyMemory is advisory "
             + "and may be stale; reconcile it with the current state. An empty strategyNotes string clears it. "
-            + "Omitting strategyNotes retains the previous notes until they expire.";
+            + "Omitting strategyNotes retains the previous notes until they expire. "
+            + "When consultationPolicyRequested is true, you may also return consultationPolicy as an object with "
+            + "exactly one field, watch: an array using only consultationContext.supportedWatchRules. This tells "
+            + "Forge when to consult you again if its AI otherwise intends to pass, until your next own turn. "
+            + "Control decks holding counters often want counterspell_window or opponent_spell; aggro decks may "
+            + "prefer watch:[] and quieter opposing turns. Request opponent_end_step for useful instant-speed "
+            + "plays, own_second_main for postcombat sequencing, or opponent_board_change to reassess opposing "
+            + "developments. Use every_action_window only when deliberately requiring thorough attention. "
+            + "Forge still reviews its proposed actions, your first useful main-phase decision, new cards in your "
+            + "hand, dangerous opposing stack actions, combat declarations and resolution choices. Repeated "
+            + "unchanged pass windows are skipped. Policies take effect only after an accepted decision; "
+            + "omitting consultationPolicy retains the prior policy until it expires. No separate routing call is made.";
 
     private final Provider provider;
     private final URI base;

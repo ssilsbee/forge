@@ -29,6 +29,7 @@ public final class LiveDecisionBridge {
         default void prepare(Player player) { }
         default void diagnostic(String category, String detail) { }
         default void completed(String decisionId, boolean accepted) { }
+        default boolean shouldReview(Player player, JsonObject question) throws Exception { return true; }
         String choose(Player player, JsonObject question) throws Exception;
         void status(String decisionId, String message);
     }
@@ -88,6 +89,7 @@ public final class LiveDecisionBridge {
             if (question == null) {
                 diagnostic("Forge handled action menus", "Snapshot outside supported scope"); return baseline;
             }
+            if (!active.shouldReview(player, question)) { return baseline; }
             diagnostic("Advisor consultations", "Action selection");
             String id = active.choose(player, question);
             if (advisor != active || !active.isEnabled()) { active.completed(decisionId, false); return baseline; }
@@ -209,6 +211,7 @@ public final class LiveDecisionBridge {
         state.addProperty("decisionId", id);
         state.addProperty("scope", scope);
         state.addProperty("baselineActionId", baseline);
+        state.addProperty("viewerTurnCount", player.getTurn());
         state.addProperty("activePlayer", "p" + player.getGame().getPlayers().indexOf(player.getGame().getPhaseHandler().getPlayerTurn()));
         state.addProperty("priorityPlayer", "p" + player.getGame().getPlayers().indexOf(player.getGame().getPhaseHandler().getPriorityPlayer()));
         JsonArray candidates = new JsonArray();
@@ -242,6 +245,8 @@ public final class LiveDecisionBridge {
             entry.addProperty("controller", "p" + player.getGame().getPlayers().indexOf(ability.getActivatingPlayer()));
             entry.addProperty("description", ability.toString());
             entry.addProperty("oracleText", ability.getHostCard().getOracleText());
+            entry.addProperty("isSpell", ability.isSpell());
+            entry.addProperty("effect", String.valueOf(ability.getApi()));
             JsonArray targets = new JsonArray();
             for (GameObject target : ability.getTargets()) {
                 if (target instanceof Card card) { targets.add("card-" + card.getId()); }
@@ -272,10 +277,11 @@ public final class LiveDecisionBridge {
             if (input == null) {
                 diagnostic("Forge handled choices", kind + ": snapshot outside supported scope"); return baseline;
             }
-            diagnostic("Advisor consultations", kind);
             input.addProperty("choiceKind", kind);
             context.addProperty("decisionId", id);
             input.add("choiceContext", context);
+            if (!active.shouldReview(player, input)) { return baseline; }
+            diagnostic("Advisor consultations", kind);
             String selected = active.choose(player, input);
             if (advisor != active || !active.isEnabled() || player.getGame().isGameOver()) {
                 active.completed(id, false); return baseline;
@@ -320,6 +326,8 @@ public final class LiveDecisionBridge {
             JsonObject question = question(player, choices, "keep-" + ((Card) normal).getId(), id,
                     "Legend rule: keep exactly one listed permanent. Compare counters. Other same-name legends go to the graveyard.");
             if (question == null) { return normal; }
+            question.addProperty("choiceKind", "legend_rule");
+            if (!advisor.shouldReview(player, question)) { return normal; }
             String selected = advisor.choose(player, question);
             if (player.getGame().isGameOver()) { return normal; }
             for (T option : options) {

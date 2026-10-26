@@ -130,6 +130,22 @@ public class ProviderClientTest {
                 .text(), "{}", "an empty terminal output array must not erase completed text deltas");
     }
 
+    @Test public void optionalConsultationPoliciesAreValidatedIndependentlyOfTheMove() throws Exception {
+        for (String policy : new String[]{"{\"watch\":[\"counterspell_window\"]}", "{\"watch\":[\"invented\"]}", "42"}) {
+            JsonObject answer = LlmHttp.object("{\"actionId\":\"land-b\",\"reason\":\"Develop mana.\",\"strategyNotes\":\"Save a counter.\"}");
+            answer.add("consultationPolicy", com.google.gson.JsonParser.parseString(policy));
+            JsonObject input = snapshot(); input.addProperty("strategyNotesRequested", true);
+            input.addProperty("consultationPolicyRequested", true);
+            try (Server server = new Server(200, openRouter(answer.toString(), "stop"), 0)) {
+                JsonObject report = ShadowReview.review(server.client(ProviderClient.Provider.OPENROUTER),
+                        "model", input, Duration.ofSeconds(5));
+                assertEquals(report.get("status").getAsString(), "legal_recommendation");
+                assertEquals(report.get("strategyNotes").getAsString(), "Save a counter.");
+                assertEquals(report.has("consultationPolicy"), policy.contains("counterspell_window"));
+            }
+        }
+    }
+
     @Test
     public void chatGptSendsDocumentedPlanRequestAndUsesFinalOutput() throws Exception {
         String answer = "{\"actionId\":\"land-b\",\"reason\":\"It enables Stage.\"}";

@@ -45,6 +45,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     // Worker only. A null value records a failed attempt so later moves do not retry planning.
     private final Map<String, JsonObject> plans = new HashMap<>();
     private final StrategyMemory memory = new StrategyMemory(); // worker only
+    private final ConsultationScheduler consultations = new ConsultationScheduler();
     private final Map<Player, Budget> budgets = new WeakHashMap<>(); // game thread only
     private volatile Future<?> pending;
     private final List<Future<?>> preparations = new ArrayList<>(); // guarded by this
@@ -58,11 +59,26 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     }
 
     @Override public void completed(String decisionId, boolean accepted) {
+        // Commit scheduling synchronously: the very next game-thread decision must see the accepted policy.
+        if (consultations.complete(decisionId, accepted)) { diagnostic("Consultation policy", "Updated after accepted choice"); }
         try {
             worker.execute(() -> {
                 if (memory.complete(decisionId, accepted)) { diagnostic("Strategy notes", "Updated after accepted choice"); }
             });
         } catch (RejectedExecutionException ignored) { /* Closing an advisor discards its session memory. */ }
+    }
+
+    @Override public boolean shouldReview(Player player, JsonObject question) throws IOException {
+        Budget budget = budgets.computeIfAbsent(player, p -> new Budget());
+        ConsultationScheduler.Verdict verdict = consultations.consider(budget.memoryKey, question);
+        diagnostic("Consultation scheduling", (verdict.consult() ? "Asked: " : "Skipped: ") + verdict.reason());
+        if (!verdict.consult()) {
+            status(question.get("decisionId").getAsString(), "Forge passes without a model request: " + verdict.reason());
+            return false;
+        }
+        JsonObject context = new JsonObject(); context.addProperty("reason", verdict.reason());
+        question.add("consultationContext", context);
+        return true;
     }
 
     public LiveAdvisor(ProviderClient provider, String model, String effort, Duration timeout, Path directory) {
@@ -142,6 +158,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         JsonObject deck = DeckStrategyPlanner.deckInput(player.getRegisteredPlayer().getDeck());
         String deckHash = DeckStrategyPlanner.digest(deck.toString());
         JsonObject detached = question.deepCopy();
+        consultations.register(budget.memoryKey, detached);
         String id = detached.get("decisionId").getAsString();
         long queued = System.nanoTime();
         String kind = detached.has("choiceKind") ? detached.get("choiceKind").getAsString() : "Action selection";
@@ -153,6 +170,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
             failures.set(0);
             return selected;
         } catch (Exception e) {
+            consultations.complete(id, false);
             task.cancel(true);
             if (enabled.get() && failures.incrementAndGet() >= 3) { pause(); status(id, "Three requests failed. Luna paused; Forge continues."); }
             throw e;
@@ -218,6 +236,9 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         }
         if (report.has("strategyNotes")) {
             memory.propose(memoryKey, id, turn, report.get("strategyNotes").getAsString());
+        }
+        if (report.has("consultationPolicy")) {
+            consultations.propose(id, report.getAsJsonObject("consultationPolicy"));
         }
         status(id, "Received in " + report.get("elapsedMillis") + " ms: " + report.get("reason").getAsString());
         return report.get("recommendedActionId").getAsString();

@@ -54,8 +54,11 @@ public final class ShadowReview {
         try {
             JsonObject answer = LlmHttp.object(completion.text());
             boolean notesAllowed = snapshot.has("strategyNotesRequested") && snapshot.get("strategyNotesRequested").getAsBoolean();
-            int expectedFields = notesAllowed && answer.has("strategyNotes") ? 3 : 2;
-            if (answer.size() != expectedFields || !answer.has("actionId") || !answer.has("reason")
+            boolean policyAllowed = snapshot.has("consultationPolicyRequested") && snapshot.get("consultationPolicyRequested").getAsBoolean();
+            Set<String> allowed = new HashSet<>(Set.of("actionId", "reason"));
+            if (notesAllowed) { allowed.add("strategyNotes"); }
+            if (policyAllowed) { allowed.add("consultationPolicy"); }
+            if (!allowed.containsAll(answer.keySet()) || !answer.has("actionId") || !answer.has("reason")
                     || !answer.get("actionId").isJsonPrimitive() || !answer.get("actionId").getAsJsonPrimitive().isString()
                     || !answer.get("reason").isJsonPrimitive() || !answer.get("reason").getAsJsonPrimitive().isString()) {
                 throw new IOException("Expected actionId and reason strings.");
@@ -78,6 +81,14 @@ public final class ShadowReview {
                 } else {
                     // Bad optional notes must not discard an otherwise legal move.
                     report.addProperty("notesStatus", "ignored_invalid_or_overlong");
+                }
+            }
+            if (policyAllowed && answer.has("consultationPolicy")) {
+                try {
+                    report.add("consultationPolicy", ConsultationScheduler.validate(answer.get("consultationPolicy")));
+                    report.addProperty("consultationPolicyStatus", "proposed_pending_engine_acceptance");
+                } catch (RuntimeException e) {
+                    report.addProperty("consultationPolicyStatus", "ignored_invalid");
                 }
             }
         } catch (IOException | RuntimeException e) {

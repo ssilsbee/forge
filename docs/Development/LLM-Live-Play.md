@@ -86,3 +86,38 @@ Arsonist (3,196 ms) after Forge's baseline passed. The human could respond to th
 resolve and play a Plains on the following turn. This verifies the live path, not general
 playing strength or full-game completion. Further smoke checks should exercise normal targeting,
 combat progression, and the monitor's pause/resume/cancellation controls.
+
+## Consultation scheduling
+
+Supported action menus are filtered locally before queuing provider work. Forge's proposed actions,
+combat declarations, and resolution choices remain reviewed. A built-in pass is reviewed at the
+first useful own main-phase window, after a new card enters the AI's hand, or when an opposing stack
+action targets the AI/its board or has a recognized board-wide removal/damage effect. These are
+conservative triggers, not a complete threat assessment. Existing legal-action scope limits still apply.
+
+Each normal reply can include an optional policy alongside `actionId`, `reason`, and strategy notes:
+
+```json
+{"actionId":"pass","reason":"Hold up a counter.","consultationPolicy":{"watch":["counterspell_window","opponent_end_step"]}}
+```
+
+The watch rules cover opposing spells (`opponent_spell`), opposing abilities (`opponent_ability`),
+an opposing stack action with a legal affordable counter candidate (`counterspell_window`), an empty
+opposing end step (`opponent_end_step`), own postcombat main phase (`own_second_main`), opposing
+battlefield changes (`opponent_board_change`), or every changed action window (`every_action_window`).
+An aggressive deck can return an empty watch list. Mandatory reviews above cannot be disabled.
+An otherwise passing window that exactly matches the immediately previous accepted review is skipped,
+even under `every_action_window`; decision UUIDs and advisory memory are excluded from this comparison.
+
+Policies are committed synchronously only after engine acceptance of the associated choice, expire
+at the start of the AI's next own turn, and are isolated by game/player. Omission retains the current
+policy; a malformed optional policy is ignored without discarding a legal move. Without an explicit
+policy, legal counter windows and opposing end steps with a draw candidate receive conservative
+coverage. Policy state is bounded and contains detached JSON only.
+
+No extra model call decides whether to consult. Skips consume no request budget and create no fake
+model response entries. Status and Insights report why each window was asked or skipped. Reasoning
+effort is unchanged (the initial live evaluation uses GPT-6 Luna high), so scheduling can be evaluated
+independently of model quality or effort changes. The scheduler and mocked live-provider tests cover
+quiet aggro play, reactive control, expiry, rejected policies, mandatory reviews, unchanged windows,
+and the absence of network calls for skipped passes.
