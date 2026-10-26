@@ -116,6 +116,28 @@ public class LiveHybridTest extends AITest {
     }
 
     public void liveProviderPathPlansOnceRecordsExactInputsAndCanBePaused() throws Exception {
+        assertLivePlanResponse("{\"strategy\":\"Assemble the combo while preserving mana.\",\"cautions\":\"Current legality takes precedence.\"}", true);
+    }
+
+    public void overSuggestedLengthDeckPlanStillReachesMoveRequests() throws Exception {
+        JsonObject plan = new JsonObject();
+        plan.addProperty("strategy", "Conditional strategy. ".repeat(200));
+        plan.addProperty("cautions", "Respect the board. ".repeat(60));
+        assertLivePlanResponse(plan.toString(), true);
+    }
+
+    public void malformedDeckPlanDoesNotBlockOrRetryDuringLaterMoves() throws Exception {
+        assertLivePlanResponse("not a JSON plan", false);
+    }
+
+    public void excessiveDeckPlanDoesNotBlockOrRetryDuringLaterMoves() throws Exception {
+        JsonObject plan = new JsonObject();
+        plan.addProperty("strategy", "x".repeat(DeckStrategyPlanner.MAX_PLAN_CHARACTERS));
+        plan.addProperty("cautions", "Still too long.");
+        assertLivePlanResponse(plan.toString(), false);
+    }
+
+    private void assertLivePlanResponse(String planResponse, boolean withPlan) throws Exception {
         AtomicInteger plans = new AtomicInteger();
         AtomicInteger reviews = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -125,11 +147,11 @@ public class LiveHybridTest extends AITest {
             String response;
             if (instructions.contains("pregame strategy")) {
                 plans.incrementAndGet();
-                response = "{\"strategy\":\"Assemble the combo while preserving mana.\",\"cautions\":\"Current legality takes precedence.\"}";
+                response = planResponse;
             } else {
                 reviews.incrementAndGet();
                 JsonObject state = LlmHttp.object(request.getAsJsonArray("messages").get(1).getAsJsonObject().get("content").getAsString());
-                assertTrue(state.has("deckStrategy"));
+                assertEquals(state.has("deckStrategy"), withPlan);
                 response = "{\"actionId\":\"pass\",\"reason\":\"Wait for this test.\"}";
             }
             JsonObject message = new JsonObject();
@@ -148,21 +170,22 @@ public class LiveHybridTest extends AITest {
             LiveDecisionBridge.install(launcher);
             Game game = initAndCreateGame();
             Player player = position(game);
-            assertNull(LiveDecisionBridge.choose(player, null));
-            assertNull(LiveDecisionBridge.choose(player, null));
+            for (int i = 0; i < 4; i++) { assertNull(LiveDecisionBridge.choose(player, null)); }
             assertEquals(plans.get(), 1);
-            assertEquals(reviews.get(), 2);
+            assertEquals(reviews.get(), 4);
+            assertTrue(launcher.isEnabled(), "A failed deck plan must not count as failed move requests.");
             try (var files = Files.walk(directory.resolve("live"))) {
                 List<Path> reports = files.filter(p -> p.toString().endsWith(".json")).toList();
-                assertEquals(reports.size(), 2);
+                assertEquals(reports.size(), 4);
                 JsonObject report = LlmHttp.object(Files.readString(reports.get(0)));
                 assertEquals(report.get("mode").getAsString(), "live_hybrid");
-                assertTrue(report.getAsJsonObject("input").has("deckStrategy"));
+                assertEquals(report.getAsJsonObject("input").has("deckStrategy"), withPlan);
                 assertFalse(report.toString().contains("test-key"));
             }
             launcher.pause();
             assertNull(LiveDecisionBridge.choose(player, null));
-            assertEquals(reviews.get(), 2);
+            assertEquals(reviews.get(), 4);
+            launcher.close();
         } finally { server.stop(0); }
     }
 
@@ -184,7 +207,7 @@ public class LiveHybridTest extends AITest {
             LiveDecisionBridge.install(launcher);
             Player player = position(initAndCreateGame());
             for (int i = 0; i < 4; i++) { assertNull(LiveDecisionBridge.choose(player, null)); }
-            assertEquals(calls.get(), 3, "Fourth request must stay paused; no automatic provider retries.");
+            assertEquals(calls.get(), 4, "One deck-plan attempt plus three failed moves; the fourth move must stay paused.");
         } finally { server.stop(0); }
     }
 }

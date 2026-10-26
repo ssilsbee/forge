@@ -110,17 +110,28 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
             final int index = i;
             Button button = button(names[i], () -> renderTab(index));
             button.setTextSize(12);
-            button.setPadding(0, 0, 0, 0);
             button.setMinimumHeight(0);
-            tabs.addView(button, new LinearLayout.LayoutParams(0, dp(landscape ? 42 : 45), 1));
+            if (landscape) {
+                button.setSingleLine(true);
+                button.setMinWidth(0);
+                button.setMinimumWidth(0);
+                button.setPadding(dp(16), 0, dp(16), 0);
+                tabs.addView(button, new LinearLayout.LayoutParams(-2, dp(42)));
+            } else {
+                button.setPadding(0, 0, 0, 0);
+                tabs.addView(button, new LinearLayout.LayoutParams(0, dp(45), 1));
+            }
         }
         if (landscape) {
             title.setTextSize(20);
-            heading.addView(title, new LinearLayout.LayoutParams(-2, -2));
-            heading.addView(tabs, new LinearLayout.LayoutParams(0, dp(42), 1));
+            heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+            heading.addView(tabs, new LinearLayout.LayoutParams(-2, dp(42)));
             Button back = button("Back to game", () -> dialog.dismiss());
             back.setTextSize(12);
-            back.setPadding(dp(4), 0, dp(4), 0);
+            back.setSingleLine(true);
+            back.setMinWidth(0);
+            back.setMinimumWidth(0);
+            back.setPadding(dp(16), 0, dp(16), 0);
             back.setMinimumHeight(0);
             heading.addView(back, new LinearLayout.LayoutParams(-2, dp(42)));
         } else {

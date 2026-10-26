@@ -29,7 +29,11 @@ into the masked key field. **Save settings** stores it locally. A blank field ke
 Its exact instructions, input, final answer, latency and usage appear in the monitor. After a
 successful test, **Enable LLM** checks model availability and opts the current launch into LLM play.
 Start a normal local Constructed match with one human and one AI. Deck analysis runs on the first
-supported choice, and the resulting compact strategy accompanies later choices.
+supported choice, and the resulting compact strategy accompanies later choices. Suggested plan
+lengths are soft targets; valid plans up to 12,000 total characters are accepted. If planning fails,
+the same move and later moves still use the LLM without deck strategy context. Planning is attempted
+once per deck in the current advisor session, so a failed plan does not repeatedly fill the turn list
+or count toward the three failed decisions that pause the advisor.
 
 **Pause / use Forge** cancels a pending model request and returns control to Forge. Three failed
 decisions also pause the advisor. **Enable LLM** starts it again. Closing the panel leaves the

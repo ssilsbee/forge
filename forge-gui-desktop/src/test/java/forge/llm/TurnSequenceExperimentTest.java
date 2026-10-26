@@ -135,6 +135,17 @@ public class TurnSequenceExperimentTest {
         assertThrows(IOException.class, () -> DeckStrategyPlanner.validatePlan("{\"strategy\":\"x\",\"cautions\":\"y\",\"extra\":true}"));
     }
 
+    public void deckPlanUsesAGenerousTotalSafetyLimit() throws IOException {
+        JsonObject plan = new JsonObject();
+        plan.addProperty("strategy", "x".repeat(DeckStrategyPlanner.MAX_PLAN_CHARACTERS - 1));
+        plan.addProperty("cautions", "y");
+        assertEquals(DeckStrategyPlanner.validatePlan(plan.toString()), plan);
+        plan.addProperty("cautions", "yy");
+        assertThrows(IOException.class, () -> DeckStrategyPlanner.validatePlan(plan.toString()));
+        plan.addProperty("strategy", 42);
+        assertThrows(IOException.class, () -> DeckStrategyPlanner.validatePlan(plan.toString()));
+    }
+
     public void deckAnalysisIsCachedWithoutAnotherModelRequest() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

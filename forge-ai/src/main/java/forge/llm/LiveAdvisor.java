@@ -38,7 +38,8 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         return thread;
     });
     private final AtomicBoolean enabled = new AtomicBoolean(true);
-    private final Map<String, JsonObject> plans = new HashMap<>(); // worker only
+    // Worker only. A null value records a failed attempt so later moves do not retry planning.
+    private final Map<String, JsonObject> plans = new HashMap<>();
     private final Map<Player, Budget> budgets = new WeakHashMap<>(); // game thread only
     private volatile Future<?> pending;
     private volatile Monitor monitor;
@@ -107,7 +108,8 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
 
     private String review(String id, JsonObject question, JsonObject deck, String deckHash) throws IOException {
         JsonObject plan = plans.get(deckHash);
-        if (plan == null) {
+        if (!plans.containsKey(deckHash)) {
+            plans.put(deckHash, null);
             String planId = id + " / deck plan";
             if (monitor != null) { monitor.request(planId, DeckStrategyPlanner.INSTRUCTIONS, deck); }
             status(planId, "Preparing deck strategy (or loading the matching cached plan)…");
@@ -115,15 +117,17 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
                 plan = DeckStrategyPlanner.planInput(deck, directory.resolve("live-deck-plans"), provider, model, effort, timeout, 8192);
                 plans.put(deckHash, plan);
                 if (monitor != null) { monitor.response(planId, plan); }
-            } catch (IOException e) {
+            } catch (IOException | RuntimeException e) {
+                if (Thread.currentThread().isInterrupted()) { throw new IOException("Deck planning interrupted.", e); }
                 JsonObject error = new JsonObject();
                 error.addProperty("status", "deck_plan_failed");
                 error.addProperty("error", e.getMessage());
+                error.addProperty("continuingWithoutPlan", true);
                 if (monitor != null) { monitor.response(planId, error); }
-                throw e;
+                status(planId, "Deck strategy unavailable; continuing LLM play without a deck plan.");
             }
         }
-        JsonObject input = DeckStrategyPlanner.attach(question, plan, deckHash);
+        JsonObject input = plan == null ? question : DeckStrategyPlanner.attach(question, plan, deckHash);
         if (monitor != null) { monitor.request(id, ProviderClient.INSTRUCTIONS, input); }
         status(id, "Luna is choosing a move… Forge's display remains available.");
         JsonObject report = ShadowReview.review(provider, model, input, timeout, effort, 8192);
