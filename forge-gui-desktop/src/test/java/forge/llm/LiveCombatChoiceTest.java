@@ -253,6 +253,20 @@ public class LiveCombatChoiceTest extends AITest {
         assertTrue(elf.isInPlay());
     }
 
+    public void invalidResolutionChoiceGetsOneCorrectionBeforeApplication() {
+        Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1);
+        Card bear = ready("Grizzly Bears", ai), elf = ready("Llanowar Elves", ai);
+        CardCollection pool = new CardCollection(List.of(bear, elf)); CardCollection baseline = new CardCollection(bear);
+        AtomicInteger calls = new AtomicInteger();
+        advisor(input -> {
+            if (calls.incrementAndGet() == 1) { return "invented"; }
+            assertTrue(input.has("correction")); assertTrue(bear.isInPlay()); assertTrue(elf.isInPlay());
+            return select(input, "Llanowar Elves");
+        });
+        CardCollectionView chosen = LiveChoiceBridge.cards(ai, pool, 1, 1, null, "Sacrifice one creature", baseline);
+        assertEquals(calls.get(), 2); assertSame(chosen.get(0), elf); assertTrue(elf.isInPlay());
+    }
+
     public void hiddenEntityChoicesStayWithForge() {
         Game game = initAndCreateGame(); Player ai = game.getPlayers().get(1), opponent = game.getPlayers().get(0);
         Card secret = addCardToZone("Black Lotus", opponent, ZoneType.Hand);

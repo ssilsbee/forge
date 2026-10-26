@@ -379,6 +379,43 @@ public class LiveHybridTest extends AITest {
         assertEquals(reason.get(), "Requested counterspell window with a legal counter");
     }
 
+    public void providerInvalidMoveGetsOneCorrectionAndCanRecover() throws Exception { assertProviderCorrection(true); }
+    public void providerInvalidMovesStopAfterTheSecondAttempt() throws Exception { assertProviderCorrection(false); }
+
+    private void assertProviderCorrection(boolean recover) throws Exception {
+        List<JsonObject> inputs = new CopyOnWriteArrayList<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            JsonObject request = LlmHttp.object(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            boolean plan = request.getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString().contains("pregame strategy");
+            String answer = "{\"strategy\":\"Sequence resources.\",\"cautions\":\"Check current legality.\"}";
+            if (!plan) {
+                JsonObject input = LlmHttp.object(request.getAsJsonArray("messages").get(1).getAsJsonObject().get("content").getAsString());
+                inputs.add(input);
+                if (inputs.size() == 2) {
+                    assertTrue(input.has("correction")); assertFalse(input.has("strategyMemory"));
+                }
+                answer = "{\"actionId\":\"" + (recover && inputs.size() == 2 ? "pass" : "invented")
+                        + "\",\"reason\":\"Test correction.\",\"strategyNotes\":\"Rejected notes must never persist.\"}";
+            }
+            JsonObject message = new JsonObject(); message.addProperty("content", answer);
+            byte[] body = ("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":" + message + "}]}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+        });
+        server.start();
+        ProviderClient provider = new ProviderClient(ProviderClient.Provider.OPENROUTER,
+                URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/"), () -> "test-key");
+        try (LiveAdvisor launcher = new LiveAdvisor(provider, "model", "high", Duration.ofSeconds(3),
+                Files.createTempDirectory(Path.of("target"), "live-correction-"))) {
+            LiveDecisionBridge.install(launcher); Player player = position(initAndCreateGame());
+            List<SpellAbility> baseline = List.of(player.getCardsIn(ZoneType.Hand).get(0).getFirstSpellAbility().copy(player));
+            var chosen = LiveDecisionBridge.choose(player, baseline);
+            if (recover) { assertNull(chosen); } else { assertSame(chosen, baseline); }
+            assertEquals(inputs.size(), 2); assertNotEquals(inputs.get(0).get("decisionId"), inputs.get(1).get("decisionId"));
+            assertTrue(launcher.isEnabled()); assertTrue(launcher.insights().contains("Corrective retries"));
+        } finally { server.stop(0); }
+    }
+
     public void repeatedProviderFailuresPauseLiveRequestsAndKeepForgePlaying() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

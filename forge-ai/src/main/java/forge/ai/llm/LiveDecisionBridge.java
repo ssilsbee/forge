@@ -18,7 +18,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
@@ -33,9 +32,11 @@ public final class LiveDecisionBridge {
         String choose(Player player, JsonObject question) throws Exception;
         void status(String decisionId, String message);
     }
+    /** A correctable model response, distinct from provider/transport failures. */
+    public static final class InvalidMoveException extends Exception {
+        public InvalidMoveException(String message) { super(message); }
+    }
     private static volatile Advisor advisor;
-    private static final Set<ApiType> ACTIVATED_EFFECTS = Set.of(ApiType.Draw, ApiType.DealDamage,
-            ApiType.GainLife, ApiType.Pump, ApiType.Destroy, ApiType.Tap, ApiType.Untap, ApiType.Attach);
     private record Selection(Advisor owner, String id) { }
     private static final Map<SpellAbility, Selection> SELECTED = Collections.synchronizedMap(new WeakHashMap<>());
     private LiveDecisionBridge() { }
@@ -77,30 +78,49 @@ public final class LiveDecisionBridge {
         }
         String decisionId = UUID.randomUUID().toString();
         try {
-            List<Option> options = options(player, baseline);
-            if (options.size() < 2) {
-                diagnostic("Forge handled action menus", "No bounded alternative menu"); return baseline;
+            String rejection = null;
+            for (int attempt = 0; attempt < 2; attempt++) {
+                if (attempt > 0 && !retryAllowed(active, player)) { return baseline; }
+                if (attempt > 0) { decisionId = UUID.randomUUID().toString(); }
+                List<SpellAbility> currentBaseline = baseline;
+                if (attempt > 0 && baseline != null && !legal(baseline.get(0), player)) { currentBaseline = null; }
+                List<Option> options = options(player, currentBaseline);
+                if (options.size() < 2) {
+                    diagnostic("Forge handled action menus", "No bounded alternative menu"); return baseline;
+                }
+                String baselineId = currentBaseline == null ? "pass" : "forge";
+                JsonObject question = question(player, options, baselineId, decisionId,
+                        "Live hybrid decision. Choose a listed legal move or pass. Forge's prepared move may include "
+                        + "choices outside the enumerated alternatives. Combat and supported resolution choices are reviewed "
+                        + "separately. This menu is not exhaustive: omitted cards may still be legally playable. "
+                        + "Mana payment remains Forge-controlled. Current state and listed actions override the advisory deck plan.");
+                if (question == null) {
+                    diagnostic("Forge handled action menus", "Snapshot outside supported scope"); return baseline;
+                }
+                if (attempt == 0 && !active.shouldReview(player, question)) { return baseline; }
+                correction(question, rejection);
+                diagnostic("Advisor consultations", "Action selection");
+                try {
+                    String id = active.choose(player, question);
+                    if (advisor != active || !active.isEnabled()) { active.completed(decisionId, false); return baseline; }
+                    Option selected = options.stream().filter(o -> o.id.equals(id)).findFirst()
+                            .orElseThrow(() -> new InvalidMoveException("The selected action ID was not in the candidate list."));
+                    if (player.getGame().isGameOver()) { throw new IllegalStateException("Game ended during request."); }
+                    if (selected.ability != null && !legal(selected.ability, player)) {
+                        throw new InvalidMoveException("The selected move failed current timing, target, or cost validation.");
+                    }
+                    diagnostic("Validated action selections", id.equals("forge") ? "Forge prepared move" : id.equals("pass") ? "Pass" : "Alternative");
+                    active.status(decisionId, selected.ability == null ? "Luna chose to pass priority." : "Validated selection: " + selected.description);
+                    if (selected.ability != null) { SELECTED.put(selected.ability, new Selection(active, decisionId)); }
+                    else { active.completed(decisionId, true); }
+                    return selected.ability == null ? null : List.of(selected.ability);
+                } catch (InvalidMoveException e) {
+                    if (attempt == 1 || !retryAllowed(active, player)) { throw e; }
+                    active.completed(decisionId, false);
+                    rejection = e.getMessage(); retryStatus(active, decisionId);
+                }
             }
-            String baselineId = baseline == null ? "pass" : "forge";
-            JsonObject question = question(player, options, baselineId, decisionId,
-                    "Live hybrid decision. Choose a listed legal move or pass. Forge's prepared move may include "
-                    + "choices outside the enumerated alternatives. Combat and supported resolution choices are reviewed "
-                    + "separately. Mana payment remains Forge-controlled. Current state and legal actions override the advisory deck plan.");
-            if (question == null) {
-                diagnostic("Forge handled action menus", "Snapshot outside supported scope"); return baseline;
-            }
-            if (!active.shouldReview(player, question)) { return baseline; }
-            diagnostic("Advisor consultations", "Action selection");
-            String id = active.choose(player, question);
-            if (advisor != active || !active.isEnabled()) { active.completed(decisionId, false); return baseline; }
-            Option selected = options.stream().filter(o -> o.id.equals(id)).findFirst().orElseThrow();
-            if (player.getGame().isGameOver()) { throw new IllegalStateException("Game ended during request."); }
-            if (selected.ability != null && !legal(selected.ability, player)) { throw new IllegalStateException("Move became unavailable."); }
-            diagnostic("Validated action selections", id.equals("forge") ? "Forge prepared move" : id.equals("pass") ? "Pass" : "Alternative");
-            active.status(decisionId, selected.ability == null ? "Luna chose to pass priority." : "Validated selection: " + selected.description);
-            if (selected.ability != null) { SELECTED.put(selected.ability, new Selection(active, decisionId)); }
-            else { active.completed(decisionId, true); }
-            return selected.ability == null ? null : List.of(selected.ability);
+            return baseline;
         } catch (Exception e) {
             active.completed(decisionId, false);
             diagnostic("Action fallback", e.getClass().getSimpleName());
@@ -122,14 +142,13 @@ public final class LiveDecisionBridge {
                 && (probe.isLandAbility() || ComputerUtilCost.canPayCost(probe, player, false));
     }
 
-    private static boolean supportedActivation(SpellAbility ability) {
-        return ability.isActivatedAbility() && !ability.isManaAbility() && ability.getApi() != null
-                && ACTIVATED_EFFECTS.contains(ability.getApi()) && ability.getSubAbility() == null
+    private static boolean supportedShape(SpellAbility ability) {
+        return ability.getApi() != null && ability.getApi() != ApiType.Charm && ability.getSubAbility() == null
                 && !ability.hasParam("CharmNum") && ability.getPayCosts() != null
                 && !ability.getPayCosts().hasXInAnyCostPart();
     }
 
-    /** Conservative families with engine-checked ordinary costs and zero or one target. */
+    /** Broad effect coverage, bounded by structural complexity and engine-checked costs/targets. */
     static List<Option> options(Player player, List<SpellAbility> baseline) {
         List<Option> result = new ArrayList<>();
         if (baseline != null) { result.add(new Option("forge", "Forge prepared move: " + baseline.get(0).getHostCard().getName()
@@ -151,18 +170,11 @@ public final class LiveDecisionBridge {
             for (SpellAbility original : card.getSpellAbilities()) {
                 String key = "card-" + card.getId() + "-ability-" + index++;
                 boolean land = card.isInZone(ZoneType.Hand) && original.isLandAbility();
-                boolean combo = card.isInZone(ZoneType.Battlefield) && original.isActivatedAbility()
-                        && (original.getApi() == ApiType.Clone || original.getApi() == ApiType.RemoveCounter);
-                boolean activation = card.isInZone(ZoneType.Battlefield) && supportedActivation(original);
-                boolean spell = card.isInZone(ZoneType.Hand) && original.isSpell()
-                        && (original.getApi() == ApiType.Counter || original.getApi() == ApiType.DealDamage
-                        || original.getApi() == ApiType.ChangeZone);
-                // Targetless permanent spells use the ordinary printed cost; other resolution choices stay Forge's.
-                boolean permanent = card.isInZone(ZoneType.Hand) && card.isPermanent() && original.isSpell()
-                        && !original.usesTargeting() && original.getSubAbility() == null
-                        && !original.hasParam("CharmNum") && !card.getManaCost().toString().contains("X");
-                if (!land && !combo && !activation && !spell && !permanent) {
-                    diagnostic("Alternative ability evaluations omitted", "Unsupported family: " + original.getApi());
+                boolean activation = card.isInZone(ZoneType.Battlefield) && original.isActivatedAbility()
+                        && !original.isManaAbility() && supportedShape(original);
+                boolean spell = card.isInZone(ZoneType.Hand) && original.isSpell() && supportedShape(original);
+                if (!land && !activation && !spell) {
+                    diagnostic("Alternative ability evaluations omitted", "Unsupported structure: " + original.getApi());
                     continue;
                 }
                 if (original.usesTargeting()) {
@@ -263,6 +275,26 @@ public final class LiveDecisionBridge {
         return state;
     }
 
+    private static boolean retryAllowed(Advisor active, Player player) {
+        return advisor == active && active.isEnabled() && !player.getGame().isGameOver()
+                && !Thread.currentThread().isInterrupted();
+    }
+
+    private static void correction(JsonObject question, String rejection) {
+        if (rejection == null) { return; }
+        JsonObject correction = new JsonObject();
+        correction.addProperty("attempt", 1);
+        correction.addProperty("maxRetries", 1);
+        correction.addProperty("rejectionReason", rejection);
+        correction.addProperty("instruction", "Your prior selection was rejected; no move was applied. Reconsider this snapshot and choose exactly one listed actionId. This is the only corrective retry.");
+        question.add("correction", correction);
+    }
+
+    private static void retryStatus(Advisor active, String id) {
+        diagnostic("Corrective retries", "Invalid selection; one second chance");
+        active.status(id, "Selection rejected. Asking Luna once more with the current candidates.");
+    }
+
     /** Shared bounded contract for combat and resolution choices; failures preserve the prepared baseline. */
     static String recommend(Player player, String kind, String scope, List<Option> options,
                             String baseline, JsonObject context) {
@@ -273,26 +305,39 @@ public final class LiveDecisionBridge {
         Advisor active = advisor;
         String id = UUID.randomUUID().toString();
         try {
-            JsonObject input = question(player, options, baseline, id, scope);
-            if (input == null) {
-                diagnostic("Forge handled choices", kind + ": snapshot outside supported scope"); return baseline;
+            String rejection = null;
+            for (int attempt = 0; attempt < 2; attempt++) {
+                if (attempt > 0 && !retryAllowed(active, player)) { return baseline; }
+                if (attempt > 0) { id = UUID.randomUUID().toString(); }
+                JsonObject input = question(player, options, baseline, id, scope);
+                if (input == null) {
+                    diagnostic("Forge handled choices", kind + ": snapshot outside supported scope"); return baseline;
+                }
+                input.addProperty("choiceKind", kind);
+                context.addProperty("decisionId", id);
+                input.add("choiceContext", context);
+                if (attempt == 0 && !active.shouldReview(player, input)) { return baseline; }
+                correction(input, rejection);
+                diagnostic("Advisor consultations", kind);
+                try {
+                    String selected = active.choose(player, input);
+                    if (advisor != active || !active.isEnabled() || player.getGame().isGameOver()) {
+                        active.completed(id, false); return baseline;
+                    }
+                    if (options.stream().noneMatch(option -> option.id().equals(selected))) {
+                        throw new InvalidMoveException("The selected action ID was not in the candidate list.");
+                    }
+                    diagnostic("Validated choices", kind + (selected.equals(baseline) ? ": Forge prepared choice" : ": alternative"));
+                    active.status(id, "Validated " + kind + " selection: " + selected);
+                    if (!kind.equals("declare_attackers") && !kind.equals("declare_blockers")) { active.completed(id, true); }
+                    return selected;
+                } catch (InvalidMoveException e) {
+                    if (attempt == 1 || !retryAllowed(active, player)) { throw e; }
+                    active.completed(id, false);
+                    rejection = e.getMessage(); retryStatus(active, id);
+                }
             }
-            input.addProperty("choiceKind", kind);
-            context.addProperty("decisionId", id);
-            input.add("choiceContext", context);
-            if (!active.shouldReview(player, input)) { return baseline; }
-            diagnostic("Advisor consultations", kind);
-            String selected = active.choose(player, input);
-            if (advisor != active || !active.isEnabled() || player.getGame().isGameOver()) {
-                active.completed(id, false); return baseline;
-            }
-            if (options.stream().noneMatch(option -> option.id().equals(selected))) {
-                throw new IllegalArgumentException("Unlisted action ID.");
-            }
-            diagnostic("Validated choices", kind + (selected.equals(baseline) ? ": Forge prepared choice" : ": alternative"));
-            active.status(id, "Validated " + kind + " selection: " + selected);
-            if (!kind.equals("declare_attackers") && !kind.equals("declare_blockers")) { active.completed(id, true); }
-            return selected;
+            return baseline;
         } catch (Exception e) {
             active.completed(id, false);
             diagnostic("Choice fallback", kind + ": " + e.getClass().getSimpleName());
@@ -323,16 +368,12 @@ public final class LiveDecisionBridge {
                 choices.add(new Option("keep-" + card.getId(), "Keep card-" + card.getId() + " (" + card.getName()
                         + "); other same-name legends go to the graveyard.", null));
             }
-            JsonObject question = question(player, choices, "keep-" + ((Card) normal).getId(), id,
-                    "Legend rule: keep exactly one listed permanent. Compare counters. Other same-name legends go to the graveyard.");
-            if (question == null) { return normal; }
-            question.addProperty("choiceKind", "legend_rule");
-            if (!advisor.shouldReview(player, question)) { return normal; }
-            String selected = advisor.choose(player, question);
+            String selected = recommend(player, "legend_rule",
+                    "Legend rule: keep exactly one listed permanent. Compare counters. Other same-name legends go to the graveyard.",
+                    choices, "keep-" + ((Card) normal).getId(), new JsonObject());
             if (player.getGame().isGameOver()) { return normal; }
             for (T option : options) {
                 if (selected.equals("keep-" + ((Card) option).getId())) {
-                    advisor.completed(id, true);
                     advisor.status(id, "Applied legend choice: " + selected);
                     return option;
                 }

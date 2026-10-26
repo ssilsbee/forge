@@ -35,15 +35,18 @@ requests may still count toward provider usage even if their move is cancelled.
 ## Deliberately limited control
 
 `LiveDecisionBridge` is an opt-in hook after the normal Forge thinking deadline. Forge's prepared
-move is offered along with normal hand land drops, supported simple permanent spells, selected
-one-target damage/counter/zone-change spells, Stage/Hexmage-style Clone/RemoveCounter abilities,
-and passing. The model also selects which same-name legendary permanent to keep. Some spells
-and abilities are excluded: multiple/divided targets, alternate faces, unsupported chains and
+move is offered along with normal hand land drops, structurally simple hand spells and non-mana
+battlefield activated abilities, and passing. Effect names are not whitelisted: ordinary discard,
+draw, ritual mana, removal and pump spells can be independent alternatives. Costs, timing and
+zero-or-one targets are checked by the engine. The model also selects which same-name legendary
+permanent to keep. Some spells and abilities are excluded: variable X costs, modal selection,
+multiple/divided targets, alternate faces, linked subabilities and
 oversized action sets. This is a conservative enumeration, not a complete Magic action space.
 
-Forge still controls mulligans, combat, mana sources, most triggered/resolution choices and
+Forge still controls mulligans, mana sources, unsupported triggered/resolution choices and
 unsupported actions. A normal prepared Forge move may involve choices beyond the alternative
 enumerator. The monitor labels this hybrid scope; it is not an end-to-end LLM Magic player.
+Combat and supported tutor/card choices have their own bounded review contracts.
 
 Only two-player Constructed games in play are eligible; simulation copies/no-GUI games are
 excluded. The ordinary startup installs no adapter. All game/card inspection happens on the
@@ -53,11 +56,20 @@ timing, targets and payment are rechecked on the game thread before returning th
 The engine reports whether the subsequent play succeeded. A concession/game end during a
 request prevents a model move from being applied.
 
-Invalid answers, failed requests, unsupported views and timeouts return the original Forge
-choice. Three consecutive failed requests pause Luna until explicitly enabled. Limits of 20
+Invalid model responses and unlisted action IDs receive one corrective request. Ordinary actions
+that fail pre-execution timing, target or cost validation also receive one retry with regenerated
+candidates and a fresh snapshot. The input records a `correction` object with the rejection reason
+and retry limit; both attempts have separate IDs and visible reports. Rejected decisions cannot
+commit notes or consultation policies. Combat/resolution contracts retry invalid IDs or responses
+against their bounded offered choices; their later semantic validation still preserves Forge on
+failure. We do not retry after execution/payment has begun, or after cancellation/game end.
+
+A second invalid selection, failed requests, unsupported views and timeouts return the original
+Forge choice. Three consecutive provider failures pause Luna until explicitly enabled. Limits of 20
 decisions per turn and 150 per player/game keep an unattended prototype bounded. The provider
 deadline defaults to 60 seconds; the outer wait allows a deck-plan request plus a decision request
-and a short margin. There are no automatic provider retries. Fallback preserves Forge's choice,
+and a short margin per attempt. Corrective attempts count against the same request budgets; transport
+failures are not automatically retried. Fallback preserves Forge's choice,
 not a guarantee that the original choice remains playable after an unrelated state change.
 
 ## Local records and verification

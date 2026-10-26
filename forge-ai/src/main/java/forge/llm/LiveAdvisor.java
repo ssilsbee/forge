@@ -172,6 +172,11 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         } catch (Exception e) {
             consultations.complete(id, false);
             task.cancel(true);
+            if (e instanceof java.util.concurrent.ExecutionException
+                    && e.getCause() instanceof LiveDecisionBridge.InvalidMoveException invalid) {
+                failures.set(0); // The provider replied; this is not a connection failure.
+                throw invalid;
+            }
             if (enabled.get() && failures.incrementAndGet() >= 3) { pause(); status(id, "Three requests failed. Luna paused; Forge continues."); }
             throw e;
         } finally {
@@ -214,7 +219,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     }
 
     private String review(String id, JsonObject question, JsonObject deck, String deckHash, long queued, String kind,
-                          String memoryKey, int turn) throws IOException {
+                          String memoryKey, int turn) throws IOException, LiveDecisionBridge.InvalidMoveException {
         long queueMillis = (System.nanoTime() - queued) / 1_000_000;
         diagnostics.time("Worker queue", queueMillis);
         JsonObject plan = preparePlan(id, deck, deckHash);
@@ -231,6 +236,9 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         if (monitor != null) { monitor.response(id, report); }
         PrivateFiles.write(session.resolve(id + ".json"), JSON.toJson(report));
         if (!"legal_recommendation".equals(report.get("status").getAsString())) {
+            if ("invalid_response".equals(report.get("status").getAsString())) {
+                throw new LiveDecisionBridge.InvalidMoveException("The previous response did not contain a valid listed action ID and explanation.");
+            }
             status(id, "Forge fallback: " + report.get("status").getAsString() + "; " + report.get("error").getAsString());
             throw new IOException("Model request did not produce a legal recommendation.");
         }

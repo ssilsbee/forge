@@ -67,7 +67,7 @@ final class ConsultationScheduler {
     private static String fingerprint(JsonObject q) throws IOException {
         JsonObject state = q.deepCopy();
         for (String key : Set.of("decisionId", "consultationContext", "consultationPolicyRequested",
-                "strategyMemory", "strategyNotesRequested", "deckStrategy")) { state.remove(key); }
+                "strategyMemory", "strategyNotesRequested", "deckStrategy", "correction")) { state.remove(key); }
         return DeckStrategyPlanner.digest(state.toString());
     }
     private static boolean available(JsonObject q, String effect) {
