@@ -135,7 +135,7 @@ public final class LiveDecisionBridge {
         List<GameObject> targets = new ArrayList<>(ability.getTargets());
         probe.resetTargets();
         for (GameObject target : targets) {
-            if (!probe.canTarget(target)) { return false; }
+            if (!legalTarget(probe, target)) { return false; }
             probe.getTargets().add(target);
         }
         return probe.canPlay() && (!probe.usesTargeting() || probe.isTargetNumberValid())
@@ -146,6 +146,23 @@ public final class LiveDecisionBridge {
         return ability.getApi() != null && ability.getApi() != ApiType.Charm && ability.getSubAbility() == null
                 && !ability.hasParam("CharmNum") && ability.getPayCosts() != null
                 && !ability.getPayCosts().hasXInAnyCostPart();
+    }
+
+    private static boolean legalTarget(SpellAbility ability, GameObject target) {
+        if (target instanceof SpellAbility spell) {
+            // canTargetSpellAbility checks the spell's host-card properties, but assumes the
+            // caller already selected a stack-targeting contract. Our mixed target pool must
+            // enforce that contract explicitly, both when enumerating and before execution.
+            if (!ability.usesTargeting() || !ability.getTargetRestrictions().getZone().contains(ZoneType.Stack)) {
+                return false;
+            }
+            boolean present = false;
+            for (var item : ability.getHostCard().getGame().getStack()) {
+                if (item.getSpellAbility().equals(spell)) { present = true; break; }
+            }
+            if (!present) { return false; }
+        }
+        return ability.canTarget(target);
     }
 
     /** Broad effect coverage, bounded by structural complexity and engine-checked costs/targets. */
@@ -186,7 +203,7 @@ public final class LiveDecisionBridge {
                     for (GameObject target : targets) {
                         SpellAbility copy = original.copy(player);
                         copy.resetTargets();
-                        if (!copy.canTarget(target)) { targetIndex++; continue; }
+                        if (!legalTarget(copy, target)) { targetIndex++; continue; }
                         copy.getTargets().add(target);
                         if (copy.canPlay() && ComputerUtilCost.canPayCost(copy, player, false)) {
                             String targetName = target instanceof Card c ? "card-" + c.getId() + " (" + c.getName() + ")"
