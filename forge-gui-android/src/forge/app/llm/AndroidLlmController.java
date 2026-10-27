@@ -91,6 +91,10 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         try { settings = secrets.read(settingsPath); }
         catch (IOException e) { latest = e.getMessage(); }
         connections.submit(this::refreshAccount);
+        if (settings.has("enabled") && settings.get("enabled").isJsonPrimitive()
+                && settings.get("enabled").getAsJsonPrimitive().isBoolean() && settings.get("enabled").getAsBoolean()) {
+            connect(settings.deepCopy(), true);
+        }
     }
 
     public void setForeground(boolean foreground) { signInForeground.setForeground(foreground); }
@@ -256,7 +260,8 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
                 + "LLM play covers supported actions, attacks, blocks, card choices, scry and surveil in two-player Constructed games. "
                 + "Large combat declarations, banding, mana payment and damage assignment use Forge. "
                 + "ChatGPT uses your plan allowance. OpenRouter uses your OpenRouter balance. "
-                + "Credentials are encrypted on this device and excluded from Android backup. Enable LLM each time you launch Forge.", 13));
+                + "Credentials are encrypted on this device and excluded from Android backup. "
+                + "Forge remembers Enable LLM and reconnects on startup. Pause / use Forge turns automatic enable off.", 13));
     }
 
     private String value(String key, String fallback) { return settings.has(key) ? settings.get(key).getAsString() : fallback; }
@@ -288,9 +293,20 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
 
     private void enable() {
         try { save(); } catch (IOException e) { status("", e.getMessage()); return; }
-        final JsonObject config = settings.deepCopy();
+        connect(settings.deepCopy(), false);
+    }
+
+    private void rememberEnabled(boolean enabled) throws IOException {
+        JsonObject next = settings.deepCopy();
+        next.addProperty("enabled", enabled);
+        secrets.write(settingsPath, next);
+        settings = next;
+    }
+
+    private void connect(JsonObject config, boolean restoring) {
         final long attempt = changes.get();
-        run("Checking the selected connection and model…", () -> {
+        run(restoring ? "Restoring the saved LLM connection…" : "Checking the selected connection and model…", () -> {
+          try {
             ProviderClient providerClient = client(config);
             String selectedModel = config.get(config.get("provider").getAsString() + "Model").getAsString();
             boolean found = false;
@@ -300,12 +316,21 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
             next.setMonitor(this);
             activity.runOnUiThread(() -> {
                 if (closed || changes.get() != attempt) { next.close(); return; }
+                try { rememberEnabled(true); }
+                catch (IOException e) { next.close(); status("", "Could not save the enabled setting. " + e.getMessage()); return; }
                 LiveAdvisor old = advisor;
                 if (old != null) { old.close(); }
                 advisor = next;
                 LiveDecisionBridge.install(next);
                 next.resumeLive();
             });
+          } catch (Exception e) {
+            if (restoring) {
+                throw new IOException("Automatic LLM connection failed. Forge remains in control. "
+                        + (e instanceof IOException ? e.getMessage() : "Check the saved connection settings."), e);
+            }
+            throw e;
+          }
         });
     }
 
@@ -381,6 +406,10 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         LiveAdvisor active = advisor;
         if (active != null) { active.pause(); }
         status("", "LLM paused. Forge is in control.");
+        activity.runOnUiThread(() -> {
+            try { rememberEnabled(false); }
+            catch (IOException e) { status("", "LLM paused, but the startup preference could not be saved. " + e.getMessage()); }
+        });
     }
 
     @Override public boolean isDisplayThread() { return Looper.myLooper() == Looper.getMainLooper(); }

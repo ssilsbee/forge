@@ -27,7 +27,7 @@ into the masked key field. **Save settings** stores it locally. A blank field ke
 
 **Test connection** sends one small request to the selected model using its provider allowance.
 Its exact instructions, input, final answer, latency and usage appear in the monitor. After a
-successful test, **Enable LLM** checks model availability and opts the current launch into LLM play.
+successful test, **Enable LLM** checks model availability and remembers that LLM play is enabled.
 Start a normal local Constructed match with one human and one AI. Deck analysis starts in the
 background after deck setup, before play/draw selection, overlapping that choice and mulligans.
 The first supported decision reuses the same analysis (waiting for it if still running), and the
@@ -40,8 +40,21 @@ or count toward the three failed decisions that pause the advisor.
 
 **Pause / use Forge** cancels a pending model request and returns control to Forge. Three failed
 decisions also pause the advisor. **Enable LLM** starts it again. Closing the panel leaves the
-advisor enabled; closing the app stops it. A fresh app launch starts paused even when credentials
-are saved. Changing saved connection settings pauses the current advisor until explicitly enabled.
+advisor enabled; closing the app stops the running advisor without clearing the user's preference.
+A fresh app launch automatically reconnects in the background when the previous successful choice
+was **Enable LLM**, using the saved provider, model, reasoning effort and encrypted credentials.
+It checks model availability without making an inference/test-completion request or opening a
+browser. A failed startup connection leaves Forge in control and keeps the preference for a later
+launch; its failure is shown in Status. **Pause / use Forge**, disconnecting, forgetting a key, or
+changing saved connection settings clears automatic enable until **Enable LLM** succeeds again.
+Existing installations need to enable once after this update because earlier versions never saved
+the enabled choice. Ordinary shutdown and automatic provider-error pausing do not erase that choice.
+
+Startup preference verification used the Android emulator's saved ChatGPT connection: a successful
+enable followed by a force-stop/cold launch restored the connection and enabled the advisor without
+pressing Enable again. After an explicit Pause, another force-stop/cold launch remained paused.
+The APK also passed compilation, alignment and signature verification. These checks did not send
+a model test-completion request or start a match.
 
 **Insights** summarizes the current advisor session on Android and in the Windows monitor. It shows
 consultations, validated selections, engine action results, model errors, and reasons that observed
