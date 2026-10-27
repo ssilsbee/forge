@@ -273,6 +273,9 @@ public final class LiveDecisionBridge {
             entry.addProperty("source", ability.getHostCard().getName());
             entry.addProperty("controller", "p" + player.getGame().getPlayers().indexOf(ability.getActivatingPlayer()));
             entry.addProperty("description", ability.toString());
+            entry.addProperty("stackDescription", item.getStackDescription());
+            Integer announcedX = ability.getXManaCostPaid();
+            if (announcedX != null) { entry.addProperty("announcedX", announcedX); }
             entry.addProperty("oracleText", ability.getHostCard().getOracleText());
             entry.addProperty("isSpell", ability.isSpell());
             entry.addProperty("effect", String.valueOf(ability.getApi()));

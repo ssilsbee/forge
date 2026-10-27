@@ -56,3 +56,34 @@ All **54 targeted regression tests passed**, including actual Tinker casting and
 4. Continue full-match testing on the user's phone before drawing conclusions about overall playing strength.
 
 The results JSON and CSV contain visible final answers, notes and timings without authentication material. The deck ZIP includes installation guidance and the reproducible scenario instructions.
+
+## Reported case: Mishra's Factory animation and attack continuity
+
+Reported October 27, 2026: the model activated Factory before combat with the stated intention to
+attack, then declined to attack in order to preserve a blocker. Forge's baseline attacked. No exact
+phone request/response or full board position was supplied, and no live-model reproduction has been
+run for this case; it is not yet a measured model-quality failure.
+
+The user subsequently clarified that there was no mana available to animate Factory again on the
+opponent's turn, and the explicit attack-decision reason was to preserve it as a blocker next turn.
+That confirms the reported defensive rationale depended on a temporary animation persisting; the
+paired spare-mana fixture below is a control case, not an explanation of this reported position.
+
+Source inspection confirms that combat snapshots include Factory's current types, power/toughness,
+tapped/sickness state, and full Oracle text, which states the animation lasts until end of turn.
+Snapshots do not explicitly describe the active type-changing effect's expiry. The prior activation
+reason is not automatically carried into combat; only optional accepted strategy notes provide that
+continuity. Thus the duration is present in text, while active-effect provenance and action history
+remain weaker parts of the context.
+
+Keeping Factory untapped can be a legitimate defensive plan if another usable mana source can pay
+to animate it again during the opponent's turn. Its current animation does not survive cleanup.
+Therefore a regression must distinguish inability to reactivate from a deliberate mana reservation,
+rather than assume every animated Factory should attack. An unexplained change from an attack plan
+can still waste the initial animation cost, even when later defending is feasible.
+
+Useful paired fixtures: an aged, attack-eligible Factory with its other mana exhausted after
+animation; and a comparable position with mana available for defensive reanimation and a meaningful
+opposing attacker. Evaluate whether the model accounts for expiry, reactivation cost, alternative
+uses of mana, and accepted intent. General improvements to investigate are engine-derived temporary
+effect durations and a short factual action history, rather than card-name-specific attack rules.
