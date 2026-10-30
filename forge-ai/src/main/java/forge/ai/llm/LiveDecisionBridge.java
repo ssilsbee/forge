@@ -49,7 +49,8 @@ public final class LiveDecisionBridge {
     private static boolean supported(Player player) {
         return advisor != null && advisor.isEnabled() && player.getGame().getMaingame() == null
                 && !player.getGame().isNoGUIUser() && !player.getGame().isGameOver()
-                && player.getGame().getRules().getGameType() == GameType.Constructed
+                && (player.getGame().getRules().getGameType() == GameType.Constructed
+                    || player.getGame().getRules().getGameType() == GameType.Commander)
                 && player.getGame().getPlayers().size() == 2;
     }
 
@@ -178,18 +179,29 @@ public final class LiveDecisionBridge {
         for (var item : player.getGame().getStack()) { targets.add(item.getSpellAbility()); }
         List<Card> sources = new ArrayList<>(player.getCardsIn(ZoneType.Hand));
         sources.addAll(player.getCardsIn(ZoneType.Battlefield));
+        for (Card commander : player.getCardsIn(ZoneType.Command)) {
+            if (commander.isCommander() && commander.getOwner().equals(player)
+                    && commander.getView().canBeShownTo(player.getView())) { sources.add(commander); }
+        }
         for (Card card : sources) {
             if (card.isFaceDown() || card.isDoubleFaced()) {
                 diagnostic("Alternative card evaluations omitted", card.isFaceDown() ? "Face-down source" : "Double-faced source");
                 continue;
             }
             int index = 0;
+            List<SpellAbility> available = new ArrayList<>();
             for (SpellAbility original : card.getSpellAbilities()) {
+                if (card.isInZone(ZoneType.Command)) {
+                    available.addAll(forge.game.GameActionUtil.getMayPlaySpellOptions(original, card, player, false));
+                } else { available.add(original); }
+            }
+            for (SpellAbility original : available) {
                 String key = "card-" + card.getId() + "-ability-" + index++;
                 boolean land = card.isInZone(ZoneType.Hand) && original.isLandAbility();
                 boolean activation = card.isInZone(ZoneType.Battlefield) && original.isActivatedAbility()
                         && !original.isManaAbility() && supportedShape(original);
-                boolean spell = card.isInZone(ZoneType.Hand) && original.isSpell() && supportedShape(original);
+                boolean spell = (card.isInZone(ZoneType.Hand) || card.isInZone(ZoneType.Command))
+                        && original.isSpell() && supportedShape(original);
                 if (!land && !activation && !spell) {
                     diagnostic("Alternative ability evaluations omitted", "Unsupported structure: " + original.getApi());
                     continue;
@@ -253,6 +265,12 @@ public final class LiveDecisionBridge {
             if (option.ability != null) {
                 candidate.addProperty("sourceCardId", "card-" + option.ability.getHostCard().getId());
                 candidate.addProperty("cost", String.valueOf(option.ability.getPayCosts()));
+                if (option.ability.getHostCard().isCommander() && option.ability.getHostCard().isInZone(ZoneType.Command)) {
+                    candidate.addProperty("castFrom", "Command");
+                    candidate.addProperty("commanderTaxGeneric", 2 * player.getCommanderCast(option.ability.getHostCard()));
+                    candidate.addProperty("manaCostNow", forge.ai.ComputerUtilMana.calculateManaCost(
+                            option.ability.getPayCosts(), option.ability, player, true, 0, false).toString());
+                }
                 candidate.addProperty("effect", String.valueOf(option.ability.getApi()));
                 JsonArray targets = new JsonArray();
                 for (GameObject target : option.ability.getTargets()) {

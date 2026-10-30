@@ -257,7 +257,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         form.addView(button("Test connection", this::test));
         form.addView(button("Cancel connection request", this::cancelOperation));
         form.addView(label("Input shows the AI's hand. Keep the panel closed for normal play. "
-                + "LLM play covers supported actions, attacks, blocks, card choices, scry and surveil in two-player Constructed games. "
+                + "LLM play covers supported actions, attacks, blocks, card choices, scry and surveil in two-player Constructed and Commander games. "
                 + "Large combat declarations, banding, mana payment and damage assignment use Forge. "
                 + "ChatGPT uses your plan allowance. OpenRouter uses your OpenRouter balance. "
                 + "Credentials are encrypted on this device and excluded from Android backup. "

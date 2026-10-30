@@ -25,6 +25,19 @@ public final class LiveChoiceBridge {
     private LiveChoiceBridge() { }
     private static final class Limit extends RuntimeException { }
 
+    public static boolean commanderReturn(Player player, Card card, String prompt, boolean baseline) {
+        if (card == null || !card.isCommander() || card.getOwner() != player || !visible(card, player)
+                || !LiveDecisionBridge.enabled(player)) { return baseline; }
+        JsonObject context = new JsonObject(); context.addProperty("prompt", prompt);
+        context.add("commander", LandDecisionSnapshot.visibleCard(card, player));
+        List<LiveDecisionBridge.Option> options = List.of(
+                new LiveDecisionBridge.Option("command", "Move the commander to its owner's command zone.", null),
+                new LiveDecisionBridge.Option("keep", "Decline the command-zone move; use the normal destination/current zone.", null));
+        return LiveDecisionBridge.recommend(player, "commander_return", "Choose whether to move this commander to the command zone. "
+                + "Consider recasting tax, access from the other zone and the current position.", options,
+                baseline ? "command" : "keep", context).equals("command");
+    }
+
     private static boolean visible(Card card, Player player) {
         return card.getView().canBeShownTo(player.getView());
     }

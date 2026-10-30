@@ -396,7 +396,11 @@ public class PlayerControllerAi extends PlayerController {
 
     @Override
     public boolean confirmAction(SpellAbility sa, PlayerActionConfirmMode mode, String message, List<String> options, Card cardToShow, Map<String, Object> params) {
-        return getAi().confirmAction(sa, mode, message, params);
+        boolean baseline = getAi().confirmAction(sa, mode, message, params);
+        if (mode == PlayerActionConfirmMode.ChangeZoneToAltDestination && sa != null && sa.getHostCard().isCommander()) {
+            return forge.ai.llm.LiveChoiceBridge.commanderReturn(player, sa.getHostCard(), message, baseline);
+        }
+        return baseline;
     }
 
     @Override
@@ -469,7 +473,11 @@ public class PlayerControllerAi extends PlayerController {
         if (effectSA != null) {
             effectSA.setActivatingPlayer(host.getController());
         }
-        return brains.aiShouldRun(replacementEffect, effectSA, host, affected);
+        boolean baseline = brains.aiShouldRun(replacementEffect, effectSA, host, affected);
+        if (replacementEffect.hasParam("CommanderMoveReplacement") && affected instanceof Card commander) {
+            return forge.ai.llm.LiveChoiceBridge.commanderReturn(player, commander, question, baseline);
+        }
+        return baseline;
     }
 
     @Override

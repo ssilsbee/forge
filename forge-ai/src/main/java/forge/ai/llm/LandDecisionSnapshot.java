@@ -69,6 +69,10 @@ public final class LandDecisionSnapshot {
         root.addProperty("turn", game.getPhaseHandler().getTurn());
         root.addProperty("phase", game.getPhaseHandler().getPhase().name());
         root.addProperty("viewer", playerId(game, viewer));
+        boolean commanderGame = game.getRules().hasAppliedVariant(forge.game.GameType.Commander)
+                || game.getRules().getGameType() == forge.game.GameType.Commander;
+        root.addProperty("format", commanderGame ? "Commander" : game.getRules().getGameType().name());
+        root.addProperty("playerCount", game.getPlayers().size());
         root.addProperty("informationPolicy", "Own hand plus visible public cards; opponent hands and all libraries are counts only. Face-down identities are omitted. Oracle text is printed text; current types, stats and counters are included. Battlefield creatures include summoningSick, accounting for haste. Summoning sickness does not prevent blocking.");
         JsonArray players = new JsonArray();
         int publicCardCount = 0;
@@ -79,6 +83,27 @@ public final class LandDecisionSnapshot {
             state.addProperty("opponent", player.isOpponentOf(viewer));
             state.addProperty("life", player.getLife());
             state.addProperty("poison", player.getPoisonCounters());
+            if (commanderGame) {
+                JsonArray commanders = new JsonArray();
+                for (Card registered : player.getCommanders()) {
+                    Card commander = game.getCardState(registered);
+                    JsonObject info = new JsonObject();
+                    info.addProperty("id", "card-" + commander.getId());
+                    info.addProperty("owner", playerId(game, commander.getOwner()));
+                    info.addProperty("zone", commander.getZone() == null ? "Unknown" : commander.getZone().getZoneType().name());
+                    info.addProperty("commandZoneCastCount", player.getCommanderCast(registered));
+                    info.addProperty("commanderTaxGeneric", 2 * player.getCommanderCast(registered));
+                    commanders.add(info);
+                }
+                state.add("commanders", commanders);
+                JsonArray received = new JsonArray();
+                for (var damage : player.getCommanderDamage()) {
+                    JsonObject item = new JsonObject(); item.addProperty("commanderId", "card-" + damage.getKey().getId());
+                    item.addProperty("combatDamage", damage.getValue()); received.add(item);
+                }
+                state.add("commanderDamageReceived", received);
+                state.addProperty("commanderDamageLossThreshold", 21);
+            }
             state.addProperty("landsPlayedThisTurn", player.getLandsPlayedThisTurn());
             state.addProperty("unlimitedLandPlays", player.getMaxLandPlaysInfinite());
             state.addProperty("maxLandPlays", player.getMaxLandPlays());
@@ -143,6 +168,7 @@ public final class LandDecisionSnapshot {
         result.addProperty("tapped", card.isTapped());
         result.addProperty("faceDown", card.isFaceDown());
         result.addProperty("token", card.isToken());
+        result.addProperty("isCommander", card.isCommander());
         JsonArray attachments = new JsonArray();
         for (Card attachment : card.getAttachedCards()) {
             if (attachment.getView().canBeShownTo(viewer.getView())) { attachments.add("card-" + attachment.getId()); }
