@@ -126,7 +126,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         if (task != null) { task.cancel(true); }
         for (Future<?> plan : preparations) { plan.cancel(true); }
         preparations.clear();
-        status("", "Luna paused. Forge is in control. Enable Luna to resume.");
+        status("", "LLM paused. Forge is in control. Enable LLM to resume.");
     }
 
     @Override public synchronized void prepare(Player player) {
@@ -147,7 +147,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     }
 
     @Override public String choose(Player player, JsonObject question) throws Exception {
-        if (!enabled.get()) { throw new IOException("Luna is paused."); }
+        if (!enabled.get()) { throw new IOException("LLM is paused."); }
         if (monitor != null && monitor.isDisplayThread()) { throw new IOException("Never wait for a model on the display thread."); }
         Budget budget = budgets.computeIfAbsent(player, p -> new Budget());
         int turn = player.getGame().getPhaseHandler().getTurn();
@@ -166,7 +166,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         pending = task;
         try {
             String selected = task.get(timeout.toSeconds() * 2 + 5, TimeUnit.SECONDS);
-            if (!enabled.get()) { throw new IOException("Luna paused before applying response."); }
+            if (!enabled.get()) { throw new IOException("LLM paused before applying response."); }
             failures.set(0);
             return selected;
         } catch (Exception e) {
@@ -177,7 +177,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
                 failures.set(0); // The provider replied; this is not a connection failure.
                 throw invalid;
             }
-            if (enabled.get() && failures.incrementAndGet() >= 3) { pause(); status(id, "Three requests failed. Luna paused; Forge continues."); }
+            if (enabled.get() && failures.incrementAndGet() >= 3) { pause(); status(id, "Three requests failed. LLM paused; Forge continues."); }
             throw e;
         } finally {
             pending = null;
@@ -226,7 +226,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         memory.attach(question, memoryKey, turn);
         JsonObject input = plan == null ? question : DeckStrategyPlanner.attach(question, plan, deckHash);
         if (monitor != null) { monitor.request(id, ProviderClient.INSTRUCTIONS, input); }
-        status(id, "Luna is choosing a move… Forge's display remains available.");
+        status(id, "LLM is choosing a move… Forge's display remains available.");
         JsonObject report = ShadowReview.review(provider, model, input, timeout, effort, 8192);
         report.addProperty("queueMillis", queueMillis);
         diagnostic("Model replies — " + kind, report.get("status").getAsString());

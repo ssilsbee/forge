@@ -110,7 +110,12 @@ public class LiveMoveCoverageTest extends AITest {
         LiveDecisionBridge.install(new LiveDecisionBridge.Advisor() {
             @Override public String choose(Player p, JsonObject q) {
                 calls.incrementAndGet();
-                for (Card spell : spells) { assertNotNull(select(q, spell, null), spell.getName()); }
+                for (Card spell : spells) {
+                    String id = select(q, spell, null);
+                    JsonObject candidate = q.getAsJsonArray("candidates").asList().stream().map(c -> c.getAsJsonObject())
+                            .filter(c -> c.get("actionId").getAsString().equals(id)).findFirst().orElseThrow();
+                    assertFalse(candidate.get("manaCostNow").getAsString().isBlank(), spell.getName());
+                }
                 return "pass";
             }
             @Override public void status(String id, String message) { }

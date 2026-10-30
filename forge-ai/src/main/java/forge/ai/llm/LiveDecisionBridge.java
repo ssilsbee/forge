@@ -111,7 +111,7 @@ public final class LiveDecisionBridge {
                         throw new InvalidMoveException("The selected move failed current timing, target, or cost validation.");
                     }
                     diagnostic("Validated action selections", id.equals("forge") ? "Forge prepared move" : id.equals("pass") ? "Pass" : "Alternative");
-                    active.status(decisionId, selected.ability == null ? "Luna chose to pass priority." : "Validated selection: " + selected.description);
+                    active.status(decisionId, selected.ability == null ? "LLM chose to pass priority." : "Validated selection: " + selected.description);
                     if (selected.ability != null) { SELECTED.put(selected.ability, new Selection(active, decisionId)); }
                     else { active.completed(decisionId, true); }
                     return selected.ability == null ? null : List.of(selected.ability);
@@ -265,11 +265,13 @@ public final class LiveDecisionBridge {
             if (option.ability != null) {
                 candidate.addProperty("sourceCardId", "card-" + option.ability.getHostCard().getId());
                 candidate.addProperty("cost", String.valueOf(option.ability.getPayCosts()));
+                if (option.ability.getPayCosts() != null && !option.ability.isLandAbility()) {
+                    candidate.addProperty("manaCostNow", forge.ai.ComputerUtilMana.calculateManaCost(
+                            option.ability.getPayCosts(), option.ability, player, true, 0, false).toString());
+                }
                 if (option.ability.getHostCard().isCommander() && option.ability.getHostCard().isInZone(ZoneType.Command)) {
                     candidate.addProperty("castFrom", "Command");
                     candidate.addProperty("commanderTaxGeneric", 2 * player.getCommanderCast(option.ability.getHostCard()));
-                    candidate.addProperty("manaCostNow", forge.ai.ComputerUtilMana.calculateManaCost(
-                            option.ability.getPayCosts(), option.ability, player, true, 0, false).toString());
                 }
                 candidate.addProperty("effect", String.valueOf(option.ability.getApi()));
                 JsonArray targets = new JsonArray();
@@ -330,7 +332,7 @@ public final class LiveDecisionBridge {
 
     private static void retryStatus(Advisor active, String id) {
         diagnostic("Corrective retries", "Invalid selection; one second chance");
-        active.status(id, "Selection rejected. Asking Luna once more with the current candidates.");
+        active.status(id, "Selection rejected. Asking LLM once more with the current candidates.");
     }
 
     /** Shared bounded contract for combat and resolution choices; failures preserve the prepared baseline. */
@@ -432,7 +434,7 @@ public final class LiveDecisionBridge {
         if (enabled(player)) {
             diagnostic("Engine action results", (decisionId == null ? "Forge" : "Advisor-selected") + (played ? ": played" : ": declined"));
             advisor.status(decisionId == null ? "" : decisionId,
-                    (decisionId == null ? "Forge: " : "Luna: ")
+                    (decisionId == null ? "Forge: " : "LLM: ")
                             + (played ? "engine played " : "engine declined ") + ability.getHostCard().getName());
         }
     }

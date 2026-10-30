@@ -32,14 +32,14 @@ final class LlmMonitor implements LiveAdvisor.Monitor {
     private final JTextArea events = area();
     private final JTextArea insights = area();
     private final JLabel status = new JLabel("Ready. Start a local Constructed match with one human and one AI.");
-    private final JFrame frame = new JFrame("Forge LLM Monitor — GPT-6 Luna high");
+    private final JFrame frame = new JFrame("Forge LLM Monitor");
     private static final class Entry { String label; String input = ""; String output = "Waiting for response…"; }
 
     LlmMonitor(String model, String effort, Runnable pause) {
         frame.setTitle("Forge LLM Monitor — " + model + " / " + effort);
         JButton fallback = new JButton("Use Forge / cancel request");
         fallback.addActionListener(e -> pause.run());
-        JButton resume = new JButton("Enable Luna");
+        JButton resume = new JButton("Enable LLM");
         resume.addActionListener(e -> LivePlayLauncher.resume());
         JPanel buttons = new JPanel();
         buttons.add(fallback);
