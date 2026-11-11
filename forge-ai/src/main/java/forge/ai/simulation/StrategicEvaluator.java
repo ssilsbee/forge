@@ -60,10 +60,45 @@ final class StrategicEvaluator {
             adj += handTerm(simAi);
             adj += answerTerm(simAi);
             adj += threatQualityTerm(simAi);
+            adj += planTerm(simAi, cfg.plan);
+            adj += ComboCatalog.term(simAi); // a known combo assembled in the hand and on the battlefield
+            adj += AntiCombo.term(simAi); // the combo pieces the opponents have in play, on the stack or to bring back
+            adj += DonateCombo.term(simAi); // harmful DonateMe permanents successfully given to an opponent
         } catch (final RuntimeException e) {
             return 0; // a refinement only: never let it break a rollout
         }
         return (int) Math.round(adj * (cfg.strategicWeightPercent / 100.0));
+    }
+
+    /**
+     * What the deck is for (see {@link DeckPlan}): damage dealt to the opponent counts more for an aggro or burn deck,
+     * the AI's own life more for a control deck, and a ramp deck values the lands and mana creatures it has beyond four.
+     */
+    private static int planTerm(final Player simAi, final DeckPlan plan) {
+        if (plan == null || plan == DeckPlan.NONE) {
+            return 0;
+        }
+        // progress towards the combos the deck is built around (cycling a creature for Living End, a pair assembled)
+        int adj = plan.combos.term(simAi);
+        // commander on the table, commander damage, the combos of the format and what the commander's strategy likes
+        adj += plan.commander.term(simAi);
+        final Player opp = simAi.getWeakestOpponent();
+        if (opp != null) {
+            adj += plan.opponentLifeExtra * Math.max(0, Math.min(20, 20 - opp.getLife()));
+        }
+        adj -= plan.ownLifeExtra * Math.max(0, Math.min(20, 20 - simAi.getLife()));
+        if (plan.manaDevelopmentExtra > 0) {
+            int sources = 0;
+            // a Signet or a filter land that nothing can pay for is no mana development
+            final ManaConversion.Profile conversion = ManaConversion.analyzeIfNeeded(simAi, true);
+            for (final Card c : simAi.getCardsIn(ZoneType.Battlefield)) {
+                if ((c.isLand() || !c.getManaAbilities().isEmpty()) && !conversion.isDead(c)) {
+                    sources++;
+                }
+            }
+            adj += plan.manaDevelopmentExtra * Math.max(0, Math.min(4, sources - 4));
+        }
+        return adj;
     }
 
     /** What the card would be worth if it were deployed, by the same rules of thumb as the board evaluator. */
@@ -164,7 +199,8 @@ final class StrategicEvaluator {
         if (threat < THREAT_THRESHOLD) {
             return 0;
         }
-        final int mana = landsInPlay(simAi) + 1;
+        // the mana rocks and Signets count too, not only the lands (and the land drop of next turn)
+        final int mana = ManaConversion.usableManaOr(simAi, landsInPlay(simAi)) + 1;
         final int oppCards = opp.getCardsIn(ZoneType.Hand).size();
         final List<Card> answers = new ArrayList<>();
         for (final Card c : simAi.getCardsIn(ZoneType.Hand)) {

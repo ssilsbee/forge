@@ -138,8 +138,6 @@ public interface IGuiGame {
     default void updateCards(Iterable<CardView> cards) {}
     default void updateCardsNetSafe(FCollectionView<CardView> cards) { updateCards(isNetGame() ? cards.threadSafeIterable() : cards); }
 
-    void updateRevealedCards(TrackableCollection<CardView> collection);
-
     default void refreshCardDetails(Iterable<CardView> cards) {}
     default void refreshField() {}
 
@@ -282,12 +280,9 @@ public interface IGuiGame {
     default boolean canPickStackTargets() { return false; }
     boolean isSelecting();
 
-    void setWeaklySelectable(final Iterable<CardView> cards);
-    void clearWeaklySelectable();
-
     /**
-     * Cards revealed to the player for the current prompt, until {@link #hideRevealedCards()}; the GUI chooses how
-     * to display them. Unrelated to {@link #updateRevealedCards}, which records the match's reveal history.
+     * Cards revealed to the player, until {@link #hideRevealedCards()}. The GUI chooses how to display them, and may
+     * keep them in its reveal history.
      */
     default void showRevealedCards(Iterable<CardView> cards) {}
     default void hideRevealedCards() {}
