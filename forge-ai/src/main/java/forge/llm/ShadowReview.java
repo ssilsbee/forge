@@ -20,6 +20,12 @@ public final class ShadowReview {
 
     public static JsonObject review(ProviderClient provider, String model, JsonObject snapshot,
                                     Duration timeout, String reasoningEffort, int maxOutputTokens) throws IOException {
+        return review(provider, model, snapshot, timeout, reasoningEffort, maxOutputTokens, lookup -> { });
+    }
+
+    public static JsonObject review(ProviderClient provider, String model, JsonObject snapshot,
+                                    Duration timeout, String reasoningEffort, int maxOutputTokens,
+                                    java.util.function.Consumer<JsonObject> lookupObserver) throws IOException {
         Set<String> candidates = validateSnapshot(snapshot);
         String baseline = snapshot.get("baselineActionId").getAsString();
         JsonObject report = new JsonObject();
@@ -39,8 +45,13 @@ public final class ShadowReview {
         report.addProperty("qualityAssessment", "unmeasured");
         long started = System.nanoTime();
         ProviderClient.Completion completion;
+        com.google.gson.JsonArray lookups = new com.google.gson.JsonArray();
+        report.add("rulesLookups", lookups);
         try {
-            completion = provider.complete(model, reasoningEffort, maxOutputTokens, snapshot, timeout);
+            completion = provider.complete(model, reasoningEffort, maxOutputTokens, snapshot, timeout, lookup -> {
+                lookups.add(lookup.deepCopy());
+                lookupObserver.accept(lookup);
+            });
             report.add("usage", completion.usage());
         } catch (IOException e) {
             report.addProperty("status", "provider_error");

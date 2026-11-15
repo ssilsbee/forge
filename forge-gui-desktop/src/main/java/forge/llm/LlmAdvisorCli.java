@@ -146,9 +146,11 @@ public final class LlmAdvisorCli {
     }
 
     private static ProviderClient provider(Map<String, String> options, ChatGptAuth auth) throws IOException {
+        Path data = Path.of(options.getOrDefault("data-dir", Path.of(System.getProperty("user.home"), ".forge-llm").toString()));
+        RulesRepository rules = RulesRepository.start(data.resolve("rules"));
         switch (required(options, "provider")) {
-            case "chatgpt": return ProviderClient.chatGpt(auth, options.get("profile"));
-            case "openrouter": return ProviderClient.openRouter(System.getenv("OPENROUTER_API_KEY"));
+            case "chatgpt": return ProviderClient.chatGpt(auth, options.get("profile")).withRules(rules);
+            case "openrouter": return ProviderClient.openRouter(System.getenv("OPENROUTER_API_KEY")).withRules(rules);
             default: throw new IOException("Provider must be chatgpt or openrouter.");
         }
     }

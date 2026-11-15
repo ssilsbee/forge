@@ -15,12 +15,14 @@ public final class LivePlayLauncher extends LiveAdvisor {
 
     public static void main(String[] args) throws Exception {
         Path directory = Path.of(System.getProperty("forge.llm.dataDir"));
+        RulesRepository rules = RulesRepository.start(directory.resolve("rules"));
         String connection = System.getProperty("forge.llm.provider", "chatgpt");
         ProviderClient provider;
         if (connection.equals("chatgpt")) {
             provider = ProviderClient.chatGpt(new ChatGptAuth(directory.resolve("connections")), System.getProperty("forge.llm.profile"));
         } else if (connection.equals("openrouter")) { provider = ProviderClient.openRouter(System.getenv("OPENROUTER_API_KEY")); }
         else { throw new IOException("Unsupported live provider."); }
+        provider.withRules(rules);
         int seconds = Integer.getInteger("forge.llm.timeoutSeconds", 45);
         if (seconds < 1 || seconds > 300) { throw new IOException("Timeout must be between 1 and 300 seconds."); }
         String model = System.getProperty("forge.llm.model", "gpt-6-luna");

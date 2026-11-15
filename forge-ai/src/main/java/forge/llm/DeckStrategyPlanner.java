@@ -122,6 +122,7 @@ public final class DeckStrategyPlanner {
         record.addProperty("elapsedMillis", (System.nanoTime() - started) / 1_000_000);
         record.add("summary", summary);
         record.add("usage", response.usage());
+        record.add("rulesLookups", response.rulesLookups());
         record.addProperty("assessment", "Advisory model-generated summary; card interactions are not certified by plan generation.");
         PrivateFiles.write(directory.resolve("deck-input-" + deckHash + ".json"), JSON.toJson(input));
         PrivateFiles.write(file, JSON.toJson(record));

@@ -227,7 +227,11 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         JsonObject input = plan == null ? question : DeckStrategyPlanner.attach(question, plan, deckHash);
         if (monitor != null) { monitor.request(id, ProviderClient.INSTRUCTIONS, input); }
         status(id, "LLM is choosing a move… Forge's display remains available.");
-        JsonObject report = ShadowReview.review(provider, model, input, timeout, effort, 8192);
+        JsonObject report = ShadowReview.review(provider, model, input, timeout, effort, 8192, lookup -> {
+            diagnostic("Rules reference", lookup.get("tool").getAsString());
+            status(id, "Rules lookup: " + lookup.get("tool").getAsString() + " " + lookup.get("arguments")
+                    + "; continuing the decision…");
+        });
         report.addProperty("queueMillis", queueMillis);
         diagnostic("Model replies — " + kind, report.get("status").getAsString());
         diagnostics.time("Model reply — " + kind, report.get("elapsedMillis").getAsLong());

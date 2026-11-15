@@ -169,7 +169,7 @@ public class ProviderClientTest {
             assertEquals(report.get("reasoningEffort").getAsString(), "high");
             assertEquals(report.get("outputLimitPolicy").getAsString(), "provider_managed");
             assertFalse(report.has("maxOutputTokens"));
-            assertFalse(request.has("tools"));
+            assertFalse(request.has("tools"), "No reference configured means no rules tools");
         }
     }
 

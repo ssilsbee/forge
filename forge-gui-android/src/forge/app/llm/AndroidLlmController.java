@@ -29,6 +29,7 @@ import forge.ai.llm.LiveDecisionBridge;
 import forge.llm.ChatGptAuth;
 import forge.llm.LiveAdvisor;
 import forge.llm.ProviderClient;
+import forge.llm.RulesRepository;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -49,6 +50,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
     private final Path settingsPath;
     private final AndroidSecrets secrets = new AndroidSecrets();
     private final ChatGptAuth auth;
+    private final RulesRepository rules;
     private final SignInForegroundGate signInForeground = new SignInForegroundGate();
     private final ExecutorService connections = Executors.newSingleThreadExecutor(job -> {
         Thread thread = new Thread(job, "forge-android-llm-connection");
@@ -79,6 +81,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         // noBackupFilesDir keeps tokens and private hands out of Android backup and shared storage.
         directory = activity.getNoBackupFilesDir().toPath().resolve("llm");
         settingsPath = directory.resolve("settings.enc");
+        rules = RulesRepository.start(directory.resolve("rules"), message -> status("", message));
         auth = new ChatGptAuth(directory.resolve("connections"), uri -> activity.runOnUiThread(() -> {
             if (closed) { return; }
             try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri.toString()))); }
@@ -286,9 +289,9 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
             boolean connected = false;
             for (var profile : auth.profiles()) { connected |= profile.getAsJsonObject().get("usingChatGptPlan").getAsBoolean(); }
             if (!connected) { throw new IOException("Continue with ChatGPT on this device first."); }
-            return ProviderClient.chatGpt(auth, null);
+            return ProviderClient.chatGpt(auth, null).withRules(rules);
         }
-        return ProviderClient.openRouter(config.has("openrouterKey") ? config.get("openrouterKey").getAsString() : null);
+        return ProviderClient.openRouter(config.has("openrouterKey") ? config.get("openrouterKey").getAsString() : null).withRules(rules);
     }
 
     private void enable() {

@@ -107,3 +107,8 @@ forge-gui-ios/robovm.properties
 # Local LLM credentials and private game captures
 .forge-llm/
 llm-captures/
+
+# Wizards rules are downloaded into a user-owned cache, never redistributed.
+ComprehensiveRules*.txt
+MagicCompRules*.txt
+rules-cache.json
