@@ -41,7 +41,7 @@ public final class RulesRepository {
     private final Consumer<String> observer;
     private volatile RulesReference current;
     private volatile String status = "Rules reference unavailable; lookup tools are disabled.";
-    private JsonObject cached;
+    private volatile JsonObject cached;
     private long nextCheck;
 
     public static RulesRepository start(Path directory) { return start(directory, message -> { }); }
@@ -74,6 +74,32 @@ public final class RulesRepository {
     RulesReference current() { return current; }
     public String status() { return status; }
 
+    public String details() {
+        return status + "\n\nRules edition: " + (current == null ? "Unavailable" : current.edition())
+                + "\nDownloaded: " + timestamp("downloadedAt")
+                + "\nLast successful check: " + timestamp("checkedAt");
+    }
+
+    private String timestamp(String field) {
+        if (cached == null || !cached.has(field)) { return "Unknown"; }
+        return java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(cached.get(field).getAsLong()));
+    }
+
+    private final java.util.concurrent.atomic.AtomicBoolean manualCheck = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /** Bypass the daily interval without blocking the UI or queuing duplicate requests. */
+    public void checkForUpdates(Runnable completed) {
+        if (!manualCheck.compareAndSet(false, true)) { return; }
+        UPDATES.execute(() -> {
+            try {
+                synchronized (this) { nextCheck = 0; refresh(); }
+            } finally {
+                manualCheck.set(false);
+                completed.run();
+            }
+        });
+    }
+
     synchronized void refresh() {
         if (clock.millis() < nextCheck) { publish(status); return; }
         nextCheck = clock.millis() + CHECK_INTERVAL.toMillis();
@@ -87,10 +113,17 @@ public final class RulesRepository {
                 JsonObject record = new JsonObject(); record.addProperty("schemaVersion", 1);
                 record.addProperty("source", latest.toString()); record.addProperty("edition", reference.edition());
                 record.addProperty("text", text); record.addProperty("lastAttemptAt", clock.millis());
+                record.addProperty("downloadedAt", clock.millis());
+                record.addProperty("checkedAt", clock.millis());
                 // Persist the entire validated document and metadata atomically before publishing it.
                 PrivateFiles.write(cacheFile, record.toString());
                 cached = record; current = reference;
-            } else { saveAttempt(); }
+            } else {
+                JsonObject record = cached.deepCopy();
+                record.addProperty("checkedAt", clock.millis());
+                record.addProperty("lastAttemptAt", clock.millis());
+                PrivateFiles.write(cacheFile, record.toString()); cached = record;
+            }
             publish("Rules reference ready: " + current.edition() + " (checked against Wizards). ");
         } catch (IOException | RuntimeException e) {
             try { saveAttempt(); } catch (IOException ignored) { /* Keep the last valid cache and reference. */ }

@@ -102,6 +102,35 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
 
     public void setForeground(boolean foreground) { signInForeground.setForeground(foreground); }
 
+    public void showRulesSettings() {
+        if (closed || activity.isFinishing()) { return; }
+        TextView details = label(rules.details()
+                + "\n\nForge checks automatically on startup, at most once daily. Manual checks run immediately. "
+                + "Older cached copies may have unknown download/check dates until the next update.", 15);
+        details.setPadding(dp(16), dp(12), dp(16), dp(12));
+        ScrollView scroll = new ScrollView(activity);
+        scroll.addView(details);
+        android.app.AlertDialog window = new android.app.AlertDialog.Builder(activity)
+                .setTitle("Magic Comprehensive Rules")
+                .setView(scroll)
+                .setNegativeButton("Close", null)
+                .setPositiveButton("Check for updates", null)
+                .create();
+        // Use the platform theme's text color inside the native settings dialog.
+        details.setTextColor(new TextView(activity).getCurrentTextColor());
+        window.setOnShowListener(ignored -> window.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            Button check = window.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
+            check.setEnabled(false);
+            details.setText("Checking Wizards for the newest rules…");
+            rules.checkForUpdates(() -> activity.runOnUiThread(() -> {
+                if (closed || !window.isShowing()) { return; }
+                details.setText(rules.details());
+                check.setEnabled(true);
+            }));
+        }));
+        window.show();
+    }
+
     public void show() {
         if (dialog != null && dialog.isShowing()) { return; }
         dialog = new Dialog(activity);

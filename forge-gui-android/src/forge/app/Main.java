@@ -689,6 +689,9 @@ public class Main extends AndroidApplication {
         @Override public void showLlmAdvisor() {
             runOnUiThread(() -> { if (llm != null) { llm.show(); } });
         }
+        @Override public void showLlmRulesSettings() {
+            runOnUiThread(() -> { if (llm != null) { llm.showRulesSettings(); } });
+        }
         private final boolean isTablet;
         private final ConnectivityManager connManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         private String switchOrientationFile;

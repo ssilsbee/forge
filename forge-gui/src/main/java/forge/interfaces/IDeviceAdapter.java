@@ -35,6 +35,7 @@ public interface IDeviceAdapter {
 
     default boolean hasLlmAdvisor() { return false; }
     default void showLlmAdvisor() { }
+    default void showLlmRulesSettings() { }
 
     /** Confine the mouse cursor to the window (desktop LibGDX only). Default no-op. */
     default void setMouseConfined(boolean confined) {

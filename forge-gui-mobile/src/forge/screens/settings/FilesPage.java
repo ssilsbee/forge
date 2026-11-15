@@ -53,6 +53,12 @@ public class FilesPage extends TabPage<SettingsScreen> {
         lstItems.addGroup(Forge.getLocalizer().getMessage("lblStorageLocations"));
 
         //Backup and Restore
+        if (Forge.getDeviceAdapter().hasLlmAdvisor()) {
+            lstItems.addItem(new Extra("Magic Comprehensive Rules",
+                    "View the downloaded rules edition and update dates, or check Wizards for the latest rules.") {
+                @Override public void select() { Forge.getDeviceAdapter().showLlmRulesSettings(); }
+            }, 0);
+        }
         lstItems.addItem(new Extra(Forge.getLocalizer().getMessage("lblBackupRestore"), Forge.getLocalizer().getMessage("lblBackupRestoreDescription")) {
             @Override
             public void select() {
