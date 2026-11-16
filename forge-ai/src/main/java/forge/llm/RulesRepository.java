@@ -38,18 +38,27 @@ public final class RulesRepository {
     private final Path cacheFile;
     private final Download download;
     private final Clock clock;
-    private final Consumer<String> observer;
+    private final java.util.concurrent.CopyOnWriteArrayList<Listener> observers = new java.util.concurrent.CopyOnWriteArrayList<>();
+    public interface Subscription extends AutoCloseable { @Override void close(); }
+    private static final class Listener {
+        private Consumer<String> observer;
+        Listener(Consumer<String> observer) { this.observer = observer; }
+        synchronized void accept(String message) {
+            if (observer != null) {
+                try { observer.accept(message); } catch (RuntimeException ignored) { /* UI observers cannot break cache updates. */ }
+            }
+        }
+        synchronized void close() { observer = null; }
+    }
     private volatile RulesReference current;
     private volatile String status = "Rules reference unavailable; lookup tools are disabled.";
     private volatile JsonObject cached;
     private long nextCheck;
 
-    public static RulesRepository start(Path directory) { return start(directory, message -> { }); }
-
-    public static RulesRepository start(Path directory, Consumer<String> observer) {
+    public static RulesRepository start(Path directory) {
         Path key = directory.toAbsolutePath().normalize();
         return ACTIVE.computeIfAbsent(key, path -> {
-            RulesRepository repository = new RulesRepository(path, RulesRepository::download, Clock.systemUTC(), observer);
+            RulesRepository repository = new RulesRepository(path, RulesRepository::download, Clock.systemUTC(), null);
             UPDATES.execute(repository::refresh);
             return repository;
         });
@@ -57,7 +66,7 @@ public final class RulesRepository {
 
     RulesRepository(Path directory, Download download, Clock clock, Consumer<String> observer) {
         cacheFile = directory.resolve("rules-cache.json");
-        this.download = download; this.clock = clock; this.observer = observer;
+        this.download = download; this.clock = clock;
         try {
             if (Files.size(cacheFile) > MAX_BYTES * 2L) { throw new IOException("Overlong rules cache."); }
             JsonObject record = LlmHttp.object(new String(Files.readAllBytes(cacheFile), StandardCharsets.UTF_8));
@@ -69,6 +78,15 @@ public final class RulesRepository {
             if (lastAttempt <= clock.millis()) { nextCheck = lastAttempt + CHECK_INTERVAL.toMillis(); }
             status = "Rules reference ready: " + reference.edition() + " (local cache).";
         } catch (IOException | RuntimeException ignored) { /* Missing/corrupt cache means no tools until a valid download. */ }
+        if (observer != null) { subscribe(observer); }
+    }
+
+    /** UI owners must close their subscription when their window/activity is destroyed. */
+    public Subscription subscribe(Consumer<String> observer) {
+        Listener listener = new Listener(java.util.Objects.requireNonNull(observer));
+        observers.add(listener);
+        listener.accept(status);
+        return () -> { listener.close(); observers.remove(listener); };
     }
 
     RulesReference current() { return current; }
@@ -140,7 +158,7 @@ public final class RulesRepository {
 
     private void publish(String message) {
         status = message;
-        try { observer.accept(message); } catch (RuntimeException ignored) { /* UI observers cannot break cache updates. */ }
+        for (Listener listener : observers) { listener.accept(message); }
     }
 
     static URI latestSource(String html) throws IOException {

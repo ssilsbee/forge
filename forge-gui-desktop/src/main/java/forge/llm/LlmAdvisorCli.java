@@ -38,7 +38,7 @@ public final class LlmAdvisorCli {
             System.out.println("Forge LLM Advisor: sample, login, profiles, models, review, logout, benchmark-export, benchmark-run, deck-plan, sequence-run\n"
                     + "Options: --data-dir DIR --profile ID --new-account --provider chatgpt|openrouter\n"
                     + "         --model MODEL --reasoning-effort high --max-output-tokens 8192\n"
-                    + "         --input SNAPSHOT --output FILE --timeout-seconds 60\n"
+                    + "         --input SNAPSHOT --output FILE --timeout-seconds 60 --retry-failed (benchmark-run)\n"
                     + "Review is shadow mode. ChatGPT uses your authorized plan; OpenRouter uses OPENROUTER_API_KEY.");
             return 0;
         }
@@ -114,7 +114,7 @@ public final class LlmAdvisorCli {
                 if (benchmarkSeconds < 1 || benchmarkSeconds > 300) { throw new IOException("Timeout must be between 1 and 300 seconds."); }
                 JsonObject summary = DecisionBenchmark.run(Path.of(required(options, "input")),
                         Path.of(required(options, "output")), benchmarkProvider, required(options, "model"),
-                        options.get("reasoning-effort"), Duration.ofSeconds(benchmarkSeconds), benchmarkTokens);
+                        options.get("reasoning-effort"), Duration.ofSeconds(benchmarkSeconds), benchmarkTokens, options.containsKey("retry-failed"));
                 System.out.println("Completed " + summary.get("attempted") + "/" + summary.get("caseCount") + " reviews; valid: "
                         + summary.get("validRecommendations") + ". See summary.md and summary.json.");
                 return summary.get("validRecommendations").getAsInt() == summary.get("caseCount").getAsInt() ? 0 : 2;
@@ -163,7 +163,7 @@ public final class LlmAdvisorCli {
 
     private static Map<String, String> parseOptions(String[] args) throws IOException {
         Set<String> allowed = Set.of("data-dir", "profile", "new-account", "provider", "model", "input", "output",
-                "timeout-seconds", "reasoning-effort", "max-output-tokens");
+                "timeout-seconds", "reasoning-effort", "max-output-tokens", "retry-failed");
         Map<String, String> options = new HashMap<>();
         for (int i = 1; i < args.length; i++) {
             if (!args[i].startsWith("--") || !allowed.contains(args[i].substring(2))) {
@@ -171,13 +171,16 @@ public final class LlmAdvisorCli {
             }
             String key = args[i].substring(2);
             String value;
-            if ("new-account".equals(key)) { value = "true"; }
+            if ("new-account".equals(key) || "retry-failed".equals(key)) { value = "true"; }
             else if (++i < args.length && !args[i].startsWith("--")) { value = args[i]; }
             else { throw new IOException("Missing value for --" + key + "."); }
             if (options.putIfAbsent(key, value) != null) { throw new IOException("Duplicate --" + key + "."); }
         }
         if (options.containsKey("profile") && options.containsKey("new-account")) {
             throw new IOException("Choose a saved profile or a new account, not both.");
+        }
+        if (options.containsKey("retry-failed") && !"benchmark-run".equals(args[0])) {
+            throw new IOException("--retry-failed is only supported by benchmark-run.");
         }
         return options;
     }

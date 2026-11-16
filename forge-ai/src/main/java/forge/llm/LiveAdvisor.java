@@ -48,6 +48,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     private final ConsultationScheduler consultations = new ConsultationScheduler();
     private final Map<Player, Budget> budgets = new WeakHashMap<>(); // game thread only
     private volatile Future<?> pending;
+    private long generation; // guarded by this; pause invalidates work even after a subsequent resume
     private final List<Future<?>> preparations = new ArrayList<>(); // guarded by this
     private volatile Monitor monitor;
     private final AdvisorDiagnostics diagnostics = new AdvisorDiagnostics();
@@ -112,7 +113,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         }
     }
     @Override public boolean isEnabled() { return enabled.get(); }
-    public void resumeLive() {
+    public synchronized void resumeLive() {
         failures.set(0);
         enabled.set(true);
         status("", "LLM enabled for supported actions, attacks, blocks, card choices, scry and surveil.");
@@ -122,6 +123,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
 
     public synchronized void pause() {
         enabled.set(false);
+        generation++;
         Future<?> task = pending;
         if (task != null) { task.cancel(true); }
         for (Future<?> plan : preparations) { plan.cancel(true); }
@@ -131,6 +133,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
 
     @Override public synchronized void prepare(Player player) {
         if (!enabled.get()) { return; }
+        long version = generation;
         try {
             // Snapshot only the known unordered deck on the game thread, before any background work.
             JsonObject deck = DeckStrategyPlanner.deckInput(player.getRegisteredPlayer().getDeck());
@@ -138,8 +141,8 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
             String id = "pregame-" + UUID.randomUUID();
             preparations.removeIf(Future::isDone);
             preparations.add(worker.submit(() -> {
-                if (!enabled.get()) { return null; }
-                return preparePlan(id, deck, deckHash);
+                requireCurrent(version);
+                return preparePlan(id, deck, deckHash, version);
             }));
         } catch (IOException e) {
             status("", "Early deck preparation unavailable; LLM play will prepare on its first decision.");
@@ -147,7 +150,11 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     }
 
     @Override public String choose(Player player, JsonObject question) throws Exception {
-        if (!enabled.get()) { throw new IOException("LLM is paused."); }
+        final long version;
+        synchronized (this) {
+            if (!enabled.get()) { throw new IOException("LLM is paused."); }
+            version = generation;
+        }
         if (monitor != null && monitor.isDisplayThread()) { throw new IOException("Never wait for a model on the display thread."); }
         Budget budget = budgets.computeIfAbsent(player, p -> new Budget());
         int turn = player.getGame().getPhaseHandler().getTurn();
@@ -158,35 +165,49 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
         JsonObject deck = DeckStrategyPlanner.deckInput(player.getRegisteredPlayer().getDeck());
         String deckHash = DeckStrategyPlanner.digest(deck.toString());
         JsonObject detached = question.deepCopy();
-        consultations.register(budget.memoryKey, detached);
         String id = detached.get("decisionId").getAsString();
         long queued = System.nanoTime();
         String kind = detached.has("choiceKind") ? detached.get("choiceKind").getAsString() : "Action selection";
-        Future<String> task = worker.submit(() -> review(id, detached, deck, deckHash, queued, kind, budget.memoryKey, turn));
-        pending = task;
+        Future<String> task;
+        synchronized (this) {
+            requireCurrent(version);
+            consultations.register(budget.memoryKey, detached);
+            task = worker.submit(() -> review(id, detached, deck, deckHash, queued, kind, budget.memoryKey, turn, version));
+            pending = task;
+        }
         try {
             String selected = task.get(timeout.toSeconds() * 2 + 5, TimeUnit.SECONDS);
-            if (!enabled.get()) { throw new IOException("LLM paused before applying response."); }
-            failures.set(0);
+            synchronized (this) { requireCurrent(version); failures.set(0); }
             return selected;
         } catch (Exception e) {
             consultations.complete(id, false);
             task.cancel(true);
             if (e instanceof java.util.concurrent.ExecutionException
                     && e.getCause() instanceof LiveDecisionBridge.InvalidMoveException invalid) {
-                failures.set(0); // The provider replied; this is not a connection failure.
+                synchronized (this) { if (generation == version) { failures.set(0); } }
                 throw invalid;
             }
-            if (enabled.get() && failures.incrementAndGet() >= 3) { pause(); status(id, "Three requests failed. LLM paused; Forge continues."); }
+            synchronized (this) {
+                if (generation == version && enabled.get() && failures.incrementAndGet() >= 3) {
+                    pause(); status(id, "Three requests failed. LLM paused; Forge continues.");
+                }
+            }
             throw e;
         } finally {
-            pending = null;
+            synchronized (this) { if (pending == task) { pending = null; } }
             diagnostics.time("Game wait — " + kind, (System.nanoTime() - queued) / 1_000_000);
             publishInsights(true);
         }
     }
 
-    private JsonObject preparePlan(String id, JsonObject deck, String deckHash) throws IOException {
+    private synchronized void requireCurrent(long version) throws IOException {
+        if (!enabled.get() || generation != version || Thread.currentThread().isInterrupted()) {
+            throw new IOException("LLM request was paused or cancelled.");
+        }
+    }
+
+    private JsonObject preparePlan(String id, JsonObject deck, String deckHash, long version) throws IOException {
+        requireCurrent(version);
         JsonObject plan = plans.get(deckHash);
         if (!plans.containsKey(deckHash)) {
             long started = System.nanoTime();
@@ -196,12 +217,16 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
             if (monitor != null) { monitor.request(planId, DeckStrategyPlanner.INSTRUCTIONS, deck); }
             status(planId, "Preparing deck strategy (or loading the matching cached plan)…");
             try {
+                requireCurrent(version);
                 plan = DeckStrategyPlanner.planInput(deck, directory.resolve("live-deck-plans"), provider, model, effort, timeout, 8192);
+                requireCurrent(version);
                 plans.put(deckHash, plan);
                 if (monitor != null) { monitor.response(planId, plan); }
                 diagnostic("Deck preparation", "Ready (generated or cached)");
                 status(planId, "Deck strategy ready for LLM decisions.");
             } catch (IOException | RuntimeException e) {
+                if (Thread.currentThread().isInterrupted()) { plans.remove(deckHash); }
+                requireCurrent(version);
                 diagnostic("Deck preparation", Thread.currentThread().isInterrupted() ? "Cancelled" : "Failed; continuing without plan");
                 if (Thread.currentThread().isInterrupted()) { throw new IOException("Deck planning interrupted.", e); }
                 JsonObject error = new JsonObject();
@@ -219,26 +244,34 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
     }
 
     private String review(String id, JsonObject question, JsonObject deck, String deckHash, long queued, String kind,
-                          String memoryKey, int turn) throws IOException, LiveDecisionBridge.InvalidMoveException {
+                          String memoryKey, int turn, long version) throws IOException, LiveDecisionBridge.InvalidMoveException {
         long queueMillis = (System.nanoTime() - queued) / 1_000_000;
         diagnostics.time("Worker queue", queueMillis);
-        JsonObject plan = preparePlan(id, deck, deckHash);
+        JsonObject plan = preparePlan(id, deck, deckHash, version);
+        requireCurrent(version);
         memory.attach(question, memoryKey, turn);
         JsonObject input = plan == null ? question : DeckStrategyPlanner.attach(question, plan, deckHash);
         if (monitor != null) { monitor.request(id, ProviderClient.INSTRUCTIONS, input); }
         status(id, "LLM is choosing a move… Forge's display remains available.");
+        requireCurrent(version);
         JsonObject report = ShadowReview.review(provider, model, input, timeout, effort, 8192, lookup -> {
             diagnostic("Rules reference", lookup.get("tool").getAsString());
             status(id, "Rules lookup: " + lookup.get("tool").getAsString() + " " + lookup.get("arguments")
                     + "; continuing the decision…");
         });
+        requireCurrent(version);
         report.addProperty("queueMillis", queueMillis);
         diagnostic("Model replies — " + kind, report.get("status").getAsString());
         diagnostics.time("Model reply — " + kind, report.get("elapsedMillis").getAsLong());
         report.addProperty("mode", "live_hybrid");
         report.add("input", input);
         if (monitor != null) { monitor.response(id, report); }
-        PrivateFiles.write(session.resolve(id + ".json"), JSON.toJson(report));
+        boolean reportSaved = true;
+        try { PrivateFiles.write(session.resolve(id + ".json"), JSON.toJson(report)); }
+        catch (IOException | SecurityException e) {
+            reportSaved = false;
+            diagnostic("Report storage", "Could not save decision report");
+        }
         if (!"legal_recommendation".equals(report.get("status").getAsString())) {
             if ("invalid_response".equals(report.get("status").getAsString())) {
                 throw new LiveDecisionBridge.InvalidMoveException("The previous response did not contain a valid listed action ID and explanation.");
@@ -253,6 +286,7 @@ public class LiveAdvisor implements LiveDecisionBridge.Advisor, AutoCloseable {
             consultations.propose(id, report.getAsJsonObject("consultationPolicy"));
         }
         status(id, "Received in " + report.get("elapsedMillis") + " ms: " + report.get("reason").getAsString());
+        if (!reportSaved) { status(id, "Decision received, but its activity report could not be saved. Check local storage."); }
         return report.get("recommendedActionId").getAsString();
     }
 

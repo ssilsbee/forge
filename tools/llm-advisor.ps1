@@ -10,10 +10,12 @@ param(
     [string]$DataDir,
     [string]$Profile,
     [switch]$NewAccount,
+    [switch]$RetryFailed,
     [int]$TimeoutSeconds = 60,
     [string]$JavaHome
 )
 $ErrorActionPreference = 'Stop'
+if ($RetryFailed -and $Action -ne 'benchmark-run') { throw '-RetryFailed is only supported by benchmark-run.' }
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $DataDir) { $DataDir = Join-Path $repo '.forge-llm' }
 if ($Action -in @('review', 'benchmark-run', 'sequence-run', 'deck-plan') -and $Provider -eq 'chatgpt' -and $PSBoundParameters.ContainsKey('MaxOutputTokens')) {
@@ -66,6 +68,7 @@ if ($Action -eq 'play-live') {
     elseif ($Action -eq 'deck-plan') { $arguments += @('--output', (Join-Path $DataDir 'deck-strategy.json')) }
     if ($Profile) { $arguments += @('--profile', $Profile) }
     if ($NewAccount) { $arguments += '--new-account' }
+    if ($RetryFailed) { $arguments += '--retry-failed' }
     if ($Action -in @('review', 'benchmark-run', 'sequence-run', 'deck-plan')) {
         $arguments += @('--timeout-seconds', $TimeoutSeconds.ToString())
         if ($Provider -eq 'openrouter') { $arguments += @('--max-output-tokens', $MaxOutputTokens.ToString()) }

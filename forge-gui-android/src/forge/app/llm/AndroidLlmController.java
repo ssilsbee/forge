@@ -51,6 +51,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
     private final AndroidSecrets secrets = new AndroidSecrets();
     private final ChatGptAuth auth;
     private final RulesRepository rules;
+    private final RulesRepository.Subscription rulesSubscription;
     private final SignInForegroundGate signInForeground = new SignInForegroundGate();
     private final ExecutorService connections = Executors.newSingleThreadExecutor(job -> {
         Thread thread = new Thread(job, "forge-android-llm-connection");
@@ -81,7 +82,8 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         // noBackupFilesDir keeps tokens and private hands out of Android backup and shared storage.
         directory = activity.getNoBackupFilesDir().toPath().resolve("llm");
         settingsPath = directory.resolve("settings.enc");
-        rules = RulesRepository.start(directory.resolve("rules"), message -> status("", message));
+        rules = RulesRepository.start(directory.resolve("rules"));
+        rulesSubscription = rules.subscribe(message -> status("", message));
         auth = new ChatGptAuth(directory.resolve("connections"), uri -> activity.runOnUiThread(() -> {
             if (closed) { return; }
             try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri.toString()))); }
@@ -262,11 +264,15 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         });
         accountInfo = label(account, 13);
         form.addView(accountInfo);
-        form.addView(button("Continue with ChatGPT", () -> run("Waiting for ChatGPT browser sign-in…", () -> {
-            auth.login(null, false);
-            refreshAccount();
-            status("", "ChatGPT connected. Test the connection, then enable LLM play.");
-        })));
+        form.addView(button("Continue with ChatGPT", () -> {
+            cancelOperation();
+            pause();
+            run("Waiting for ChatGPT browser sign-in…", () -> {
+                auth.login(null, false);
+                refreshAccount();
+                status("", "ChatGPT connected. Test the connection, then enable LLM play.");
+            });
+        }));
         form.addView(button("Disconnect ChatGPT", () -> run("Disconnecting ChatGPT…", () -> {
             pause();
             boolean revoked = auth.logout(null);
@@ -536,6 +542,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
     private int dp(int value) { return Math.round(value * activity.getResources().getDisplayMetrics().density); }
     @Override public void close() {
         closed = true;
+        rulesSubscription.close();
         signInForeground.close();
         cancelOperation();
         LiveAdvisor active = advisor; if (active != null) { active.close(); }

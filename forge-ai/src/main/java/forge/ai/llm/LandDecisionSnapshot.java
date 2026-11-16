@@ -90,7 +90,12 @@ public final class LandDecisionSnapshot {
                     JsonObject info = new JsonObject();
                     info.addProperty("id", "card-" + commander.getId());
                     info.addProperty("owner", playerId(game, commander.getOwner()));
-                    info.addProperty("zone", commander.getZone() == null ? "Unknown" : commander.getZone().getZoneType().name());
+                    // A commander can be shuffled into a library and drawn without revealing its identity.
+                    // Public identity/tax history does not authorize tracking it through hidden zones.
+                    boolean locationVisible = commander.getView().canBeShownTo(viewer.getView())
+                            && (!commander.isFaceDown() || commander.getView().canFaceDownBeShownTo(viewer.getView()));
+                    info.addProperty("zone", !locationVisible || commander.getZone() == null
+                            ? "Unknown" : commander.getZone().getZoneType().name());
                     info.addProperty("commandZoneCastCount", player.getCommanderCast(registered));
                     info.addProperty("commanderTaxGeneric", 2 * player.getCommanderCast(registered));
                     commanders.add(info);

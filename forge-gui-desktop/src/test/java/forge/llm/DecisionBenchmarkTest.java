@@ -106,4 +106,34 @@ public class DecisionBenchmarkTest {
             assertEquals(calls.get(), 12);
         } finally { server.stop(0); }
     }
+
+    public void explicitRetryRecoversFromProviderFailureWithoutRepeatingSuccessfulCases() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            int number = calls.incrementAndGet();
+            exchange.getRequestBody().readAllBytes();
+            if (number == 2) { exchange.sendResponseHeaders(503, -1); exchange.close(); return; }
+            JsonObject message = new JsonObject();
+            message.addProperty("content", "{\"actionId\":\"pass\",\"reason\":\"Keep the card.\"}");
+            byte[] bytes = ("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":" + message + "}]}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
+        });
+        server.start();
+        try {
+            ProviderClient client = new ProviderClient(ProviderClient.Provider.OPENROUTER,
+                    URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/"), () -> "test-key");
+            Path output = Files.createTempDirectory(Path.of("target"), "benchmark-retry-");
+            JsonObject first = DecisionBenchmark.run(directory.resolve("manifest.json"), output, client, "test", "high", Duration.ofSeconds(5), 8192);
+            assertEquals(first.get("attempted").getAsInt(), 2); assertEquals(calls.get(), 2);
+            assertEquals(DecisionBenchmark.run(directory.resolve("manifest.json"), output, client, "test", "high", Duration.ofSeconds(5), 8192), first);
+            assertEquals(calls.get(), 2, "Default resume must not spend again on a cached failure");
+            assertThrows(IOException.class, () -> DecisionBenchmark.run(directory.resolve("manifest.json"), output, client, "changed-model", "high", Duration.ofSeconds(5), 8192, true));
+            JsonObject retried = DecisionBenchmark.run(directory.resolve("manifest.json"), output, client, "test", "high", Duration.ofSeconds(5), 8192, true);
+            assertEquals(retried.get("validRecommendations").getAsInt(), 12);
+            assertEquals(calls.get(), 13, "Only the failed and previously unattempted cases should run");
+            DecisionBenchmark.run(directory.resolve("manifest.json"), output, client, "test", "high", Duration.ofSeconds(5), 8192, true);
+            assertEquals(calls.get(), 13);
+        } finally { server.stop(0); }
+    }
 }

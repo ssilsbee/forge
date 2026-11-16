@@ -116,6 +116,25 @@ public class LiveCommanderTest extends AITest {
         assertNotEquals(DeckStrategyPlanner.digest(first.toString()), DeckStrategyPlanner.digest(pair.toString()));
     }
 
+    public void hiddenCommanderLocationsAreNotTrackedAcrossLibraryAndHand() {
+        Game game = position(); Player ai = game.getPlayers().get(1), opponent = game.getPlayers().get(0);
+        Card other = commander(opponent, "Rograkh, Son of Rohgahh");
+        opponent.setCommanderReplacementSuppressed(true);
+        game.getAction().moveToLibrary(other, -1, null);
+        opponent.setCommanderReplacementSuppressed(false);
+        for (ZoneType zone : java.util.List.of(ZoneType.Library, ZoneType.Hand)) {
+            Card current = game.getCardState(other);
+            if (zone == ZoneType.Hand) { game.getAction().moveToHand(current, null); }
+            current = game.getCardState(other);
+            assertFalse(current.getView().canBeShownTo(ai.getView()));
+            JsonObject enemy = LandDecisionSnapshot.visibleState(ai).getAsJsonArray("players").get(0).getAsJsonObject();
+            assertEquals(enemy.getAsJsonArray("commanders").get(0).getAsJsonObject().get("zone").getAsString(), "Unknown");
+            JsonObject own = LandDecisionSnapshot.visibleState(opponent).getAsJsonArray("players").get(0).getAsJsonObject();
+            assertEquals(own.getAsJsonArray("commanders").get(0).getAsJsonObject().get("zone").getAsString(),
+                    zone == ZoneType.Hand ? "Hand" : "Unknown");
+        }
+    }
+
     public void commanderReturnChoiceReachesTheModelAndCanDecline() {
         Game game = position(); Player ai = game.getPlayers().get(1);
         Card c = commander(ai, "Isamaru, Hound of Konda");

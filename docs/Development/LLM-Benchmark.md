@@ -24,9 +24,10 @@ The suite is stored under `.forge-llm/benchmark-suite`; reviews and summaries ar
 directory. Use a different result directory for another model/configuration. The same command
 resumes matching saved results without additional inference. Questions, the entire scoring manifest,
 model, provider, effort, token setting and deadline are fingerprinted. Changed questions or mismatched
-cached settings are rejected. A cached failure is also reused, never silently retried. To explicitly
-retry one failed request, archive its individual JSON report before rerunning; preserve successful
-reports to avoid charging for them again. Provider errors stop the run and leave a partial summary.
+cached settings are rejected. A cached failure is also reused, never silently retried. Add
+`-RetryFailed` to explicitly retry failed cases and continue previously unattempted cases while
+preserving successful reports. Each retry uses provider allowance. The Java CLI equivalent is
+`--retry-failed` on `benchmark-run`. Provider errors still stop the run and leave a partial summary.
 
 OpenRouter uses the same commands with `-Provider openrouter`, an explicit model slug and a locally
 supplied `OPENROUTER_API_KEY`. See [the advisor guide](LLM-Advisor.md) for connection details.

@@ -16,6 +16,23 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.testng.Assert.*;
 
 public class RulesRepositoryTest {
+    @Test public void replacingAUiSubscriptionReleasesTheOldCallback() throws Exception {
+        RulesRepository repository = repo(Files.createTempDirectory("rules-subscriptions"), NOW,
+                online(OLD, new AtomicInteger()));
+        List<String> first = new ArrayList<>(), replacement = new ArrayList<>();
+        RulesRepository.Subscription old = repository.subscribe(first::add);
+        assertEquals(first.size(), 1, "Subscribers immediately receive the current status");
+        old.close(); old.close();
+        try (RulesRepository.Subscription next = repository.subscribe(replacement::add);
+             RulesRepository.Subscription broken = repository.subscribe(message -> { throw new IllegalStateException(); })) {
+            repository.refresh();
+            assertEquals(first.size(), 1, "Closed UI must never receive another notification");
+            assertTrue(replacement.get(replacement.size() - 1).contains("Rules reference ready"));
+        }
+        int delivered = replacement.size();
+        repository.refresh();
+        assertEquals(replacement.size(), delivered);
+    }
     private static final String OLD = "2026-11-06";
     private static final String NEW = "2026-11-13";
     private static final Instant NOW = Instant.parse("2026-11-14T00:00:00Z");

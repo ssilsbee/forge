@@ -154,8 +154,19 @@ public final class ChatGptAuth {
         });
     }
 
+    private record LoginAttempt(String profileId, String hostId, String registered, String id) { }
+
+    private JsonObject loginProfile(LoginAttempt attempt) throws IOException {
+        if (Thread.currentThread().isInterrupted()) { throw new IOException("ChatGPT sign-in was interrupted."); }
+        JsonObject profile = read(profilePath(attempt.profileId()));
+        if (!profile.has("loginAttempt") || !attempt.id().equals(profile.get("loginAttempt").getAsString())) {
+            throw new IOException("ChatGPT sign-in was cancelled or replaced by another connection request.");
+        }
+        return profile;
+    }
+
     public String login(String requested, boolean newAccount) throws IOException {
-        return locked(() -> {
+        LoginAttempt attempt = locked(() -> {
             JsonObject settings = settings();
             JsonObject host = read(directory.resolve("host.json"));
             if (!host.has("hostId")) {
@@ -163,33 +174,33 @@ public final class ChatGptAuth {
                 storage.write(directory.resolve("host.json"), host);
             }
             String profileId;
-            if (newAccount) {
-                profileId = UUID.randomUUID().toString();
-            } else if (requested != null || settings.has("activeProfile")) {
-                profileId = selectedProfile(requested, settings);
-            } else if (settings.has("pendingProfile")) {
-                profileId = settings.get("pendingProfile").getAsString();
-            } else {
-                profileId = UUID.randomUUID().toString();
-            }
-            Path profilePath = profilePath(profileId);
-            if (requested != null && !Files.exists(profilePath)) {
-                throw new IOException("No saved ChatGPT profile has this ID.");
-            }
-            JsonObject profile = read(profilePath);
+            if (newAccount) { profileId = UUID.randomUUID().toString(); }
+            else if (requested != null || settings.has("activeProfile")) { profileId = selectedProfile(requested, settings); }
+            else if (settings.has("pendingProfile")) { profileId = settings.get("pendingProfile").getAsString(); }
+            else { profileId = UUID.randomUUID().toString(); }
+            Path path = profilePath(profileId);
+            if (requested != null && !Files.exists(path)) { throw new IOException("No saved ChatGPT profile has this ID."); }
+            JsonObject profile = read(path);
             profile.addProperty("profileId", profileId);
             String registered = profile.has("client_id") ? profile.get("client_id").getAsString() : null;
-            String state = randomValue();
-            String nonce = randomValue();
-            String verifier = randomValue();
+            String attemptId = UUID.randomUUID().toString();
+            profile.addProperty("loginAttempt", attemptId);
+            storage.write(path, profile);
+            settings.addProperty("pendingProfile", profileId);
+            saveSettings(settings);
+            return new LoginAttempt(profileId, host.get("hostId").getAsString(), registered, attemptId);
+        });
+        // No credential/file lock is held while the user is in the browser or waiting to return to Forge.
+        try {
+            String state = randomValue(), nonce = randomValue(), verifier = randomValue();
             String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
                     MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
-            try (OAuthLoopback listener = new OAuthLoopback(state, registered)) {
+            try (OAuthLoopback listener = new OAuthLoopback(state, attempt.registered())) {
                 String redirect = listener.redirect();
                 Map<String, String> query = new LinkedHashMap<>();
-                query.put("client_id", registered == null ? "dynamic_agent_client" : registered);
-                if (registered == null) { query.put("agent_name_hint", "Forge LLM Advisor"); }
-                query.put("ext_agent_host_id", host.get("hostId").getAsString());
+                query.put("client_id", attempt.registered() == null ? "dynamic_agent_client" : attempt.registered());
+                if (attempt.registered() == null) { query.put("agent_name_hint", "Forge LLM Advisor"); }
+                query.put("ext_agent_host_id", attempt.hostId());
                 query.put("response_type", "code");
                 query.put("redirect_uri", redirect);
                 query.put("scope", "openid profile email offline_access resource.invoke " + DIRECT_SCOPE);
@@ -202,39 +213,49 @@ public final class ChatGptAuth {
                 System.out.println("Continue with ChatGPT in your browser. Approve ChatGPT plan usage for Forge LLM Advisor.");
                 browser.open(authorize);
                 Map<String, String> result;
-                try {
-                    result = listener.await(signInWindow);
-                } catch (java.util.concurrent.TimeoutException e) {
-                    throw new IOException("ChatGPT sign-in timed out; start login again.");
-                } catch (java.util.concurrent.ExecutionException e) {
-                    throw new IOException("ChatGPT authorization was declined.");
-                }
-                String clientId = result.getOrDefault("client_id", registered);
-                profile.addProperty("client_id", clientId);
-                // Keep the issued registration even if the code expires before exchange.
-                storage.write(profilePath, profile);
-                settings.addProperty("pendingProfile", profileId);
-                saveSettings(settings);
+                try { result = listener.await(signInWindow); }
+                catch (java.util.concurrent.TimeoutException e) { throw new IOException("ChatGPT sign-in timed out; start login again."); }
+                catch (java.util.concurrent.ExecutionException e) { throw new IOException("ChatGPT authorization was declined."); }
+                String clientId = result.getOrDefault("client_id", attempt.registered());
+                locked(() -> {
+                    JsonObject profile = loginProfile(attempt);
+                    // Retain a newly issued registration even if the token exchange subsequently fails.
+                    profile.addProperty("client_id", clientId);
+                    storage.write(profilePath(attempt.profileId()), profile);
+                    return null;
+                });
                 beforeTokenExchange.awaitReady();
+                locked(() -> { loginProfile(attempt); return null; });
                 JsonObject token = tokenRequest(Map.of("grant_type", "authorization_code", "client_id", clientId,
                         "code", result.get("code"), "code_verifier", verifier,
                         "redirect_uri", redirect, "resource", RESOURCE));
                 JsonObject identity = verifyIdentity(token.get("id_token").getAsString(), clientId, nonce, jwks(), Instant.now());
-                checkSameIdentity(profile, identity);
-                profile.addProperty("issuer", ISSUER);
-                profile.add("subject", identity.get("sub"));
-                profile.add("email", identity.get("email"));
-                applyTokens(profile, token, false);
-                storage.write(profilePath, profile);
-                settings.addProperty("activeProfile", profileId);
-                settings.remove("pendingProfile");
-                saveSettings(settings);
-                if (!hasDirectScope(profile)) {
-                    throw new IOException("Signed in, but ChatGPT plan usage was not granted. Enable it when reconnecting.");
-                }
-                return profileId;
+                return locked(() -> {
+                    JsonObject profile = loginProfile(attempt);
+                    checkSameIdentity(profile, identity);
+                    profile.addProperty("issuer", ISSUER);
+                    profile.add("subject", identity.get("sub"));
+                    profile.add("email", identity.get("email"));
+                    applyTokens(profile, token, false);
+                    profile.remove("loginAttempt");
+                    storage.write(profilePath(attempt.profileId()), profile);
+                    JsonObject settings = settings();
+                    settings.addProperty("activeProfile", attempt.profileId());
+                    if (settings.has("pendingProfile") && attempt.profileId().equals(settings.get("pendingProfile").getAsString())) {
+                        settings.remove("pendingProfile");
+                    }
+                    saveSettings(settings);
+                    if (!hasDirectScope(profile)) {
+                        throw new IOException("Signed in, but ChatGPT plan usage was not granted. Enable it when reconnecting.");
+                    }
+                    return attempt.profileId();
+                });
             }
-        });
+        } catch (IOException e) { throw e; }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("ChatGPT sign-in was interrupted.");
+        } catch (Exception e) { throw new IOException("ChatGPT connection could not be completed."); }
     }
 
     public String accessToken(String requested) throws IOException {
@@ -285,7 +306,7 @@ public final class ChatGptAuth {
                             "application/x-www-form-urlencoded", null, HTTP_TIMEOUT);
                 } catch (Exception e) { revoked = false; }
             }
-            for (String field : List.of("access_token", "refresh_token", "id_token", "scope", "expires_at", "earliest_refresh_at")) {
+            for (String field : List.of("access_token", "refresh_token", "id_token", "scope", "expires_at", "earliest_refresh_at", "loginAttempt")) {
                 profile.remove(field);
             }
             storage.write(path, profile);

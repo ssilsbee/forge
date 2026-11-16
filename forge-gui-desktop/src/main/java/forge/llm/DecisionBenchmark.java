@@ -363,6 +363,11 @@ public final class DecisionBenchmark {
 
     public static JsonObject run(Path manifestPath, Path output, ProviderClient provider, String model,
                                  String effort, Duration timeout, int tokens) throws IOException {
+        return run(manifestPath, output, provider, model, effort, timeout, tokens, false);
+    }
+
+    public static JsonObject run(Path manifestPath, Path output, ProviderClient provider, String model,
+                                 String effort, Duration timeout, int tokens, boolean retryFailed) throws IOException {
         JsonObject manifest = LlmHttp.object(Files.readString(manifestPath));
         if (!VERSION.equals(manifest.get("suiteVersion").getAsString())) { throw new IOException("Unsupported benchmark suite."); }
         JsonArray reports = new JsonArray();
@@ -377,14 +382,17 @@ public final class DecisionBenchmark {
             if (!hash.equals(item.get("snapshotSha256").getAsString())) { throw new IOException("Benchmark input changed after engine verification."); }
             String fingerprint = digest(digest(manifest.toString()) + ":" + hash + ":" + provider.name() + ":" + model + ":" + effort + ":" + tokens + ":" + timeout);
             Path reportFile = output.resolve(id + ".json");
-            JsonObject report;
+            JsonObject report = null;
             if (Files.exists(reportFile)) {
                 report = LlmHttp.object(Files.readString(reportFile));
                 if (!report.has("benchmarkFingerprint") || !fingerprint.equals(report.get("benchmarkFingerprint").getAsString())) {
                     throw new IOException("Cached benchmark settings differ. Choose a new output directory.");
                 }
-                System.out.println("Reused " + id + "; no model request.");
-            } else {
+                if (retryFailed && !"legal_recommendation".equals(report.get("status").getAsString())) {
+                    report = null;
+                } else { System.out.println("Reused " + id + "; no model request."); }
+            }
+            if (report == null) {
                 report = ShadowReview.review(provider, model, LlmHttp.object(content), timeout, effort, tokens);
                 report.addProperty("benchmarkFingerprint", fingerprint);
                 report.addProperty("caseId", id);
