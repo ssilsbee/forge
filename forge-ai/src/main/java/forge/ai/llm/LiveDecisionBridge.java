@@ -40,7 +40,11 @@ public final class LiveDecisionBridge {
     private record Selection(Advisor owner, String id) { }
     private static final Map<SpellAbility, Selection> SELECTED = Collections.synchronizedMap(new WeakHashMap<>());
     private LiveDecisionBridge() { }
-    public static void install(Advisor value) { advisor = value; }
+    public static synchronized void install(Advisor value) { advisor = value; }
+    public static synchronized boolean uninstall(Advisor owner) {
+        if (advisor != owner) { return false; }
+        advisor = null; return true;
+    }
 
     static boolean enabled(Player player) {
         return supported(player) && player.getGame().getAge() == GameStage.Play;

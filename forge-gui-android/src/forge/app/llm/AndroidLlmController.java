@@ -25,7 +25,9 @@ import android.widget.TextView;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-import forge.ai.llm.LiveDecisionBridge;
+import com.google.gson.JsonArray;
+import forge.llm.AdvisorController;
+import forge.llm.AdvisorSettings;
 import forge.llm.ChatGptAuth;
 import forge.llm.LiveAdvisor;
 import forge.llm.ProviderClient;
@@ -37,10 +39,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicLong;
 
 /** Android-owned settings and monitor. A dialog overlays the game without stopping its render loop. */
 public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoCloseable {
@@ -53,17 +51,10 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
     private final RulesRepository rules;
     private final RulesRepository.Subscription rulesSubscription;
     private final SignInForegroundGate signInForeground = new SignInForegroundGate();
-    private final ExecutorService connections = Executors.newSingleThreadExecutor(job -> {
-        Thread thread = new Thread(job, "forge-android-llm-connection");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final AdvisorController controller;
     private final Map<String, Entry> entries = new LinkedHashMap<>(); // Android main thread only
     private final StringBuilder events = new StringBuilder();
     private JsonObject settings = new JsonObject();
-    private volatile LiveAdvisor advisor;
-    private volatile Future<?> operation;
-    private final AtomicLong changes = new AtomicLong();
     private boolean closed;
     private Dialog dialog;
     private LinearLayout body;
@@ -95,11 +86,19 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         });
         try { settings = secrets.read(settingsPath); }
         catch (IOException e) { latest = e.getMessage(); }
-        connections.submit(this::refreshAccount);
-        if (settings.has("enabled") && settings.get("enabled").isJsonPrimitive()
-                && settings.get("enabled").getAsJsonPrimitive().isBoolean() && settings.get("enabled").getAsBoolean()) {
-            connect(settings.deepCopy(), true);
-        }
+        controller = new AdvisorController(directory, auth, rules, activity::runOnUiThread, new AdvisorController.View() {
+            @Override public void status(String message) { AndroidLlmController.this.status("", message); }
+            @Override public void paused() throws IOException { rememberEnabled(false); }
+            @Override public void beforeEnable(AdvisorSettings settings) throws IOException { rememberEnabled(true); }
+            @Override public LiveAdvisor.Monitor monitor(AdvisorSettings settings) { return AndroidLlmController.this; }
+        });
+        controller.profiles(profiles -> {
+            refreshAccount(profiles);
+            if (settings.has("enabled") && settings.get("enabled").isJsonPrimitive()
+                    && settings.get("enabled").getAsJsonPrimitive().isBoolean() && settings.get("enabled").getAsBoolean()) {
+                connect(settings.deepCopy(), true);
+            }
+        });
     }
 
     public void setForeground(boolean foreground) { signInForeground.setForeground(foreground); }
@@ -245,9 +244,9 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         model = edit(false, "Model ID");
         form.addView(model);
         String initial = chosenProvider();
-        model.setText(value(initial + "Model", initial.equals("chatgpt") ? "gpt-6-luna" : ""));
+        model.setText(value(initial + "Model", initial.equals("chatgpt") ? AdvisorSettings.DEFAULT_MODEL : ""));
         form.addView(label("Reasoning effort", 15));
-        String[] efforts = {"none", "minimal", "low", "medium", "high", "xhigh", "max"};
+        String[] efforts = AdvisorSettings.EFFORTS.toArray(new String[0]);
         effort = spinner(efforts);
         effort.setSelection(java.util.Arrays.asList(efforts).indexOf(value("effort", "high")));
         form.addView(effort);
@@ -257,28 +256,15 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
                 String current = chosenProvider();
                 if (current.equals(previous)) { return; }
                 settings.addProperty(previous + "Model", model.getText().toString().trim());
-                model.setText(value(current + "Model", current.equals("chatgpt") ? "gpt-6-luna" : ""));
+                model.setText(value(current + "Model", current.equals("chatgpt") ? AdvisorSettings.DEFAULT_MODEL : ""));
                 previous = current;
             }
             @Override public void onNothingSelected(AdapterView<?> p) { }
         });
         accountInfo = label(account, 13);
         form.addView(accountInfo);
-        form.addView(button("Continue with ChatGPT", () -> {
-            cancelOperation();
-            pause();
-            run("Waiting for ChatGPT browser sign-in…", () -> {
-                auth.login(null, false);
-                refreshAccount();
-                status("", "ChatGPT connected. Test the connection, then enable LLM play.");
-            });
-        }));
-        form.addView(button("Disconnect ChatGPT", () -> run("Disconnecting ChatGPT…", () -> {
-            pause();
-            boolean revoked = auth.logout(null);
-            refreshAccount();
-            status("", revoked ? "ChatGPT disconnected." : "Local ChatGPT tokens cleared; remote revocation could not be confirmed.");
-        })));
+        form.addView(button("Continue with ChatGPT", () -> controller.signIn(this::refreshAccount)));
+        form.addView(button("Disconnect ChatGPT", () -> controller.signOut(this::refreshAccount)));
         form.addView(label(settings.has("openrouterKey") ? "OpenRouter key is saved on this device." : "OpenRouter API key", 13));
         apiKey = edit(true, "Paste key; leave blank to keep saved key");
         form.addView(apiKey);
@@ -319,14 +305,17 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         if (!before.equals(settings.toString())) { pause(); }
     }
 
-    private ProviderClient client(JsonObject config) throws IOException {
-        if (config.get("provider").getAsString().equals("chatgpt")) {
-            boolean connected = false;
-            for (var profile : auth.profiles()) { connected |= profile.getAsJsonObject().get("usingChatGptPlan").getAsBoolean(); }
-            if (!connected) { throw new IOException("Continue with ChatGPT on this device first."); }
-            return ProviderClient.chatGpt(auth, null).withRules(rules);
-        }
-        return ProviderClient.openRouter(config.has("openrouterKey") ? config.get("openrouterKey").getAsString() : null).withRules(rules);
+    private AdvisorSettings runtime(JsonObject config) {
+        String name = config.has("provider") ? config.get("provider").getAsString() : "chatgpt";
+        ProviderClient.Provider selected = switch (name) {
+            case "chatgpt" -> ProviderClient.Provider.CHATGPT;
+            case "openrouter" -> ProviderClient.Provider.OPENROUTER;
+            default -> throw new IllegalArgumentException("Choose ChatGPT or OpenRouter.");
+        };
+        return new AdvisorSettings(selected,
+                config.has(name + "Model") ? config.get(name + "Model").getAsString() : selected == ProviderClient.Provider.CHATGPT ? AdvisorSettings.DEFAULT_MODEL : "",
+                config.has("effort") ? config.get("effort").getAsString() : "high", 60,
+                config.has("openrouterKey") ? config.get("openrouterKey").getAsString() : null);
     }
 
     private void enable() {
@@ -342,113 +331,35 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
     }
 
     private void connect(JsonObject config, boolean restoring) {
-        final long attempt = changes.get();
-        run(restoring ? "Restoring the saved LLM connection…" : "Checking the selected connection and model…", () -> {
-          try {
-            ProviderClient providerClient = client(config);
-            String selectedModel = config.get(config.get("provider").getAsString() + "Model").getAsString();
-            boolean found = false;
-            for (var item : providerClient.models()) { found |= selectedModel.equals(item.getAsJsonObject().get("id").getAsString()); }
-            if (!found) { throw new IOException("The selected model is not listed by this connection. Check its model ID."); }
-            LiveAdvisor next = new LiveAdvisor(providerClient, selectedModel, config.get("effort").getAsString(), Duration.ofSeconds(60), directory);
-            next.setMonitor(this);
-            activity.runOnUiThread(() -> {
-                if (closed || changes.get() != attempt) { next.close(); return; }
-                try { rememberEnabled(true); }
-                catch (IOException e) { next.close(); status("", "Could not save the enabled setting. " + e.getMessage()); return; }
-                LiveAdvisor old = advisor;
-                if (old != null) { old.close(); }
-                advisor = next;
-                LiveDecisionBridge.install(next);
-                next.resumeLive();
-            });
-          } catch (Exception e) {
-            if (restoring) {
-                throw new IOException("Automatic LLM connection failed. Forge remains in control. "
-                        + (e instanceof IOException ? e.getMessage() : "Check the saved connection settings."), e);
-            }
-            throw e;
-          }
-        });
+        try { controller.enable(runtime(config)); }
+        catch (RuntimeException e) {
+            status("", restoring ? "Automatic LLM connection could not start. Check the saved connection settings."
+                    : "Choose a provider, model, and reasoning effort first.");
+        }
     }
 
     private void test() {
-        try { save(); } catch (IOException e) { status("", e.getMessage()); return; }
-        final JsonObject config = settings.deepCopy();
-        run("Testing the selected model (uses provider allowance)…", () -> {
-            ProviderClient providerClient = client(config);
-            String modelId = config.get(config.get("provider").getAsString() + "Model").getAsString();
-            String id = "connection-" + System.currentTimeMillis();
-            String instructions = "Connection check for Forge. Return only the JSON object {\"connected\":true}.";
-            JsonObject input = new JsonObject(); input.addProperty("request", "Confirm the connection.");
-            request(id, instructions, input);
-            long start = System.nanoTime();
-            try {
-                ProviderClient.Completion result = providerClient.completeWithInstructions(instructions, modelId,
-                        config.get("effort").getAsString(), 8192, input, Duration.ofSeconds(60));
-                JsonObject report = new JsonObject();
-                report.addProperty("responseText", result.text());
-                report.addProperty("elapsedMillis", (System.nanoTime() - start) / 1_000_000);
-                report.addProperty("provider", providerClient.name()); report.addProperty("model", modelId);
-                report.add("usage", result.usage());
-                response(id, report);
-                JsonObject answer = com.google.gson.JsonParser.parseString(result.text()).getAsJsonObject();
-                if (!answer.has("connected") || !answer.get("connected").getAsBoolean()) { throw new IOException("Model returned an unexpected connection-check answer."); }
-                status(id, "Connection verified with " + modelId + ". View Input and Output, then enable LLM play.");
-            } catch (Exception e) {
-                JsonObject report = new JsonObject(); report.addProperty("status", "connection_failed");
-                report.addProperty("error", e instanceof IOException ? e.getMessage() : "Connection test failed.");
-                response(id, report); throw e;
-            }
-        });
-    }
-
-    private interface Action { void run() throws Exception; }
-    private void run(String message, Action action) {
-        if (operation != null && !operation.isDone()) { status("", "A connection request is already running. Cancel it first if needed."); return; }
-        status("", message);
-        operation = connections.submit(() -> {
-            try { action.run(); }
-            catch (Exception e) { if (!Thread.currentThread().isInterrupted()) { status("", e instanceof IOException ? e.getMessage() : "Connection request failed."); } }
-            catch (LinkageError e) {
-                android.util.Log.e("ForgeLlm", "Android runtime compatibility error", e);
-                status("", "An Android compatibility error prevented the connection. See the device log.");
-            }
-        });
-    }
-
-    private void refreshAccount() {
-        String message = "ChatGPT: not connected on this device";
         try {
-            for (var item : auth.profiles()) {
-                JsonObject profile = item.getAsJsonObject();
-                if (profile.get("usingChatGptPlan").getAsBoolean()) {
-                    message = "ChatGPT connected" + (profile.has("email") && !profile.get("email").isJsonNull()
-                            ? ": " + profile.get("email").getAsString() : ""); break;
-                }
+            save();
+            controller.test(runtime(settings), this);
+        } catch (IOException | RuntimeException e) { status("", "Check the connection settings before testing."); }
+    }
+
+    private void refreshAccount(JsonArray profiles) {
+        String message = "ChatGPT: not connected on this device";
+        for (var item : profiles) {
+            JsonObject profile = item.getAsJsonObject();
+            if (profile.get("active").getAsBoolean() && profile.get("usingChatGptPlan").getAsBoolean()) {
+                message = "ChatGPT connected" + (profile.has("email") && !profile.get("email").isJsonNull()
+                        ? ": " + profile.get("email").getAsString() : ""); break;
             }
-        } catch (IOException e) { message = e.getMessage(); }
-        final String result = message;
-        activity.runOnUiThread(() -> { account = result; if (accountInfo != null) { accountInfo.setText(result); } });
+        }
+        account = message;
+        if (accountInfo != null) { accountInfo.setText(message); }
     }
 
-    private void cancelOperation() {
-        changes.incrementAndGet();
-        Future<?> task = operation;
-        if (task != null) { task.cancel(true); }
-        status("", "Connection request cancelled.");
-    }
-
-    private void pause() {
-        changes.incrementAndGet();
-        LiveAdvisor active = advisor;
-        if (active != null) { active.pause(); }
-        status("", "LLM paused. Forge is in control.");
-        activity.runOnUiThread(() -> {
-            try { rememberEnabled(false); }
-            catch (IOException e) { status("", "LLM paused, but the startup preference could not be saved. " + e.getMessage()); }
-        });
-    }
+    private void cancelOperation() { controller.cancel(); }
+    private void pause() { controller.pause(); }
 
     @Override public boolean isDisplayThread() { return Looper.myLooper() == Looper.getMainLooper(); }
     @Override public void request(String id, String instructions, JsonObject input) {
@@ -544,10 +455,7 @@ public final class AndroidLlmController implements LiveAdvisor.Monitor, AutoClos
         closed = true;
         rulesSubscription.close();
         signInForeground.close();
-        cancelOperation();
-        LiveAdvisor active = advisor; if (active != null) { active.close(); }
-        LiveDecisionBridge.install(null);
-        connections.shutdownNow();
+        controller.close();
         if (dialog != null) { dialog.dismiss(); }
     }
 }

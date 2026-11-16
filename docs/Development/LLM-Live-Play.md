@@ -1,5 +1,7 @@
 # Playable hybrid AI and LLM Monitor
 
+Windows and Android share the [advisor controller and lifecycle](LLM-Architecture.md).
+
 ## Windows setup in Forge
 
 Start Forge normally (or double-click `Run Forge Windows.bat` in a local checkout),
