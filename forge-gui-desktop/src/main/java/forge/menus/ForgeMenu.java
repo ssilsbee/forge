@@ -77,6 +77,9 @@ public final class ForgeMenu {
         add(new LayoutMenu().getMenu());
         MenuUtil.withMatchUI(vmu -> add(new DisplayMenu(vmu.getControl()).getMenu()));
         add(new AudioMenu().getMenu());
+        JMenuItem advisor = new JMenuItem("LLM Advisor...");
+        advisor.addActionListener(e -> forge.llm.DesktopAdvisor.show());
+        add(advisor);
         add(HelpMenu.getMenu());
         addSeparator();
         add(OnlineMenu.getMenu());

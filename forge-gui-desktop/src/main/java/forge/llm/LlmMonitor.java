@@ -36,11 +36,15 @@ final class LlmMonitor implements LiveAdvisor.Monitor {
     private static final class Entry { String label; String input = ""; String output = "Waiting for response…"; }
 
     LlmMonitor(String model, String effort, Runnable pause) {
+        this(model, effort, pause, LivePlayLauncher::resume);
+    }
+
+    LlmMonitor(String model, String effort, Runnable pause, Runnable resumeAction) {
         frame.setTitle("Forge LLM Monitor — " + model + " / " + effort);
         JButton fallback = new JButton("Use Forge / cancel request");
         fallback.addActionListener(e -> pause.run());
         JButton resume = new JButton("Enable LLM");
-        resume.addActionListener(e -> LivePlayLauncher.resume());
+        resume.addActionListener(e -> resumeAction.run());
         JPanel buttons = new JPanel();
         buttons.add(fallback);
         buttons.add(resume);
@@ -80,6 +84,9 @@ final class LlmMonitor implements LiveAdvisor.Monitor {
         area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
         return area;
     }
+
+    void show() { frame.setState(JFrame.NORMAL); frame.setVisible(true); frame.toFront(); }
+    void dispose() { frame.dispose(); }
 
     @Override public boolean isDisplayThread() { return SwingUtilities.isEventDispatchThread(); }
 

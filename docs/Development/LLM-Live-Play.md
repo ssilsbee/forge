@@ -1,5 +1,31 @@
 # Playable hybrid AI and LLM Monitor
 
+## Windows setup in Forge
+
+Start Forge normally (or double-click `Run Forge Windows.bat` in a local checkout),
+open the **Forge** menu, and choose **LLM Advisor...**. No advisor command-line options
+are required.
+
+The double-click launcher discovers Java 17+ from `JAVA_HOME`, standard JDK install
+locations, or the Java executable on `PATH`. It selects the newest desktop dependency
+JAR, uses Forge's standard Java compatibility options, and reads resources directly
+from `forge-gui/res`; copying assets into `target` is unnecessary.
+
+1. Click **Sign in with ChatGPT** and complete authorization in your browser.
+2. Click **Refresh models**, choose a model, reasoning effort, and request timeout.
+3. Click **Enable advisor**. Forge checks the connection and model before enabling play.
+4. Start a two-player local Constructed or Commander game with an AI opponent.
+
+**Show activity** restores the monitor. **Pause / use Forge AI** cancels advisor work
+and returns decisions to Forge. Closing setup leaves the advisor running. Settings are
+saved, but each new Forge session starts with the advisor paused. **Sign out** pauses
+the advisor and revokes the saved ChatGPT connection where possible.
+
+In a source checkout, setup reuses `.forge-llm/connections`, including connections made
+with the older login command. Existing CLI launchers below remain available.
+Packaged installations store the UI's connection and settings under
+`~/.forge-llm` so their installation folder does not need to be writable.
+
 Launch the Windows prototype with the existing authorized provider connection:
 
 ```powershell

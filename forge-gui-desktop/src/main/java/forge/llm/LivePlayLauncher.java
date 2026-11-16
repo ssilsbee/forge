@@ -9,6 +9,7 @@ import java.time.Duration;
 /** Explicit desktop entry point using the shared Android/desktop advisor. */
 public final class LivePlayLauncher extends LiveAdvisor {
     private static LivePlayLauncher active;
+    private static LlmMonitor monitor;
     LivePlayLauncher(ProviderClient provider, String model, String effort, Duration timeout, Path directory) {
         super(provider, model, effort, timeout, directory);
     }
@@ -28,7 +29,10 @@ public final class LivePlayLauncher extends LiveAdvisor {
         String model = System.getProperty("forge.llm.model", "gpt-6-luna");
         String effort = System.getProperty("forge.llm.reasoningEffort", "high");
         active = new LivePlayLauncher(provider, model, effort, Duration.ofSeconds(seconds), directory);
-        SwingUtilities.invokeAndWait(() -> active.setMonitor(new LlmMonitor(model, effort, active::pause)));
+        SwingUtilities.invokeAndWait(() -> {
+            monitor = new LlmMonitor(model, effort, active::pause);
+            active.setMonitor(monitor);
+        });
         LiveDecisionBridge.install(active);
         forge.view.Main.main(new String[0]);
     }
@@ -37,6 +41,15 @@ public final class LivePlayLauncher extends LiveAdvisor {
         if (active != null) {
             active.resumeLive();
         }
+    }
+
+    static void pauseActive() {
+        if (active != null) { active.pause(); }
+    }
+
+    static void closeActive() {
+        if (active != null) { active.close(); active = null; }
+        if (monitor != null) { monitor.dispose(); monitor = null; }
     }
 
 
